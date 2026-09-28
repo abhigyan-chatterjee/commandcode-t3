@@ -157,6 +157,7 @@ describe("provider compatibility", () => {
       "grok",
       "opencode",
       "antigravity",
+      "commandcode",
       "customDriver",
     ]) {
       const adapter = ProviderDriverKind.make(kind);
