@@ -63,24 +63,38 @@ node_bin="${T3CODE_NODE:-$(command -v node)}"
 # Extract version from apps/server/package.json
 version="$(node -e 'try { console.log(JSON.parse(fs.readFileSync("apps/server/package.json")).version); } catch { console.log("0.0.42"); }' 2>/dev/null || echo "0.0.42")"
 
-if [ "$skip_build" = false ]; then
-  step "Building web client assets..."
-  if command -v vp >/dev/null 2>&1; then
-    (cd "$repo_root" && vp run --filter @t3tools/web build >/dev/null)
-  elif command -v pnpm >/dev/null 2>&1; then
-    (cd "$repo_root" && pnpm --filter @t3tools/web build >/dev/null)
+# Ensure vp is available in PATH
+if ! command -v vp >/dev/null 2>&1; then
+  if [ -x "$HOME/.local/share/vite-plus/bin/vp" ]; then
+    export PATH="$HOME/.local/share/vite-plus/bin:$PATH"
+  elif [ -x "$HOME/.local/bin/vp" ]; then
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+fi
+
+if ! command -v vp >/dev/null 2>&1; then
+  step "Installing Vite+ (vp)..."
+  if command -v npm >/dev/null 2>&1; then
+    npm install -g vite-plus >/dev/null 2>&1 || curl -fsSL https://vite.plus | bash
   else
-    (cd "$repo_root/apps/web" && npm run build >/dev/null)
+    curl -fsSL https://vite.plus | bash
+  fi
+  if [ -d "$HOME/.local/share/vite-plus/bin" ]; then
+    export PATH="$HOME/.local/share/vite-plus/bin:$PATH"
+  fi
+fi
+
+if [ "$skip_build" = false ]; then
+  if [ ! -d "$repo_root/node_modules" ] || [ ! -d "$repo_root/apps/server/node_modules" ] || [ ! -f "$repo_root/node_modules/.bin/vp" ]; then
+    step "Installing project dependencies (vp i)..."
+    (cd "$repo_root" && vp i)
   fi
 
+  step "Building web client assets..."
+  (cd "$repo_root" && vp run --filter @t3tools/web build)
+
   step "Building server bundle..."
-  if command -v vp >/dev/null 2>&1; then
-    (cd "$repo_root" && vp run --filter t3 build:bundle >/dev/null)
-  elif command -v pnpm >/dev/null 2>&1; then
-    (cd "$repo_root" && pnpm --filter t3 build:bundle >/dev/null)
-  else
-    (cd "$repo_root/apps/server" && npm run build:bundle >/dev/null)
-  fi
+  (cd "$repo_root" && vp run --filter t3 build:bundle)
 fi
 
 # Verify build outputs exist

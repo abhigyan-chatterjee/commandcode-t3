@@ -17,7 +17,7 @@
 # instead of fetching the release again.
 set -eu
 
-repo="${T3CODE_REPO:-abhigyan-chatterjee/t3code}"
+repo="${T3CODE_REPO:-abhigyan-chatterjee/commandcode-t3}"
 base_url="${T3CODE_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
 t3_home="${T3CODE_HOME:-$HOME/.t3}"
 bin_dir="${T3CODE_INSTALL_BIN_DIR:-$HOME/.local/bin}"
