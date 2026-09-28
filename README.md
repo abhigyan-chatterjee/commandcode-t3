@@ -1,134 +1,92 @@
-# T3 Code
+# Command Code for T3 Code (`commandcode-t3`)
 
-T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+This repository is a lightweight, tracking fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code) (MIT) that adds **Command Code** (CLI binary `cmd`, [commandcode.ai](https://commandcode.ai)) as a first-class, built-in agent provider.
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Google Antigravity, and Command Code. If they're set up on your computer, T3 Code can control them.
+Because upstream T3 Code is not accepting new third-party provider integrations, this fork maintains full Command Code integration while staying continuously in sync with upstream T3 Code updates.
 
-## "Wait, what are you selling me?"
+---
 
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
+## ⚡ Quick Start: One-Line Install
 
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
+Install T3 Code with built-in Command Code support with a single command:
 
-## Installation
+```bash
+curl -fsSL https://raw.githubusercontent.com/abhigyan-chatterjee/commandcode-t3/main/scripts/install.sh | bash
+```
 
-> [!WARNING]
-> T3 Code currently supports Codex, Claude, Cursor, Grok Build, OpenCode, Antigravity, and Command Code. Install and authenticate at least one provider before use:
+Once installed, run:
+
+```bash
+t3
+```
+
+This starts the server and opens the local T3 Code GUI in your default browser.
+
+> **Prerequisites:**
 >
-> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-> - Cursor: install [Cursor CLI](https://cursor.com/cli) and run `agent login`
-> - Grok Build: install [Grok Build CLI](https://x.ai/cli) and run `grok login`
-> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
-> - Antigravity: enable it in Settings, then use **Install Antigravity** and **Sign in with Google**. No CLI is required.
-> - Command Code: install [Command Code](https://commandcode.ai/docs) (`npm i -g command-code`) and run `cmd login`
+> 1. [Node.js](https://nodejs.org) (v24+ recommended, v22.16+ minimum)
+> 2. [Command Code CLI](https://commandcode.ai/docs): `npm i -g command-code && cmd login`
 
-### Command line
+---
 
-```bash
-curl -fsSL https://t3.codes/install.sh | sh
-```
+## ⚠️ Important: Command Code Terms of Service & Account Risks
 
-On Windows, in PowerShell:
+Before using Command Code with T3 Code, please review Command Code's [Terms of Service and Acceptable Use Policies](https://commandcode.ai):
 
-```powershell
-irm https://t3.codes/install.ps1 | iex
-```
+- **Strict One-Account Rule**: Command Code's terms explicitly restrict each user to **one account**. Operating or controlling multiple accounts to circumvent plan limits, free credits, or rate limits is considered a material violation. Doing so can result in an **immediate, permanent, and irrevocable lifetime ban** across all associated accounts without refund.
+- **Official CLI Headless Protocol**: This integration connects to Command Code strictly via its official, documented headless NDJSON interface (`cmd -p --output-format json`). It runs locally on your machine with your authenticated credentials. It does **not** scrape web interfaces, use unauthorized third-party proxy routers, or reverse-engineer private backend endpoints.
+- **Account Credits & Usage Limits**: T3 Code does not bypass Command Code's billing or credit counters. Every turn consumes your account credits according to your active Command Code plan and model choice.
+- **Avoid Aggressive Automated Loops**: Because T3 Code executes turns programmatically, running continuous, unthrottled automation loops or concurrent headless calls may trigger automated fraud, rate-limiting, or abuse-detection systems on Command Code's backend. Use the tool responsibly for interactive pair-programming.
+- **Unofficial Fork Disclaimer**: This repository is an independent, community-driven project and is not affiliated with, endorsed by, or sponsored by Command Code (`commandcode.ai`) or Ping Labs (`ping.gg`).
 
-Then run `t3` to start the server and open the local web app. `t3 service install` keeps it running in the background, `t3 update` moves to a newer release, and `t3 --help` has the full reference.
+---
 
-To try it once without installing, run `npx t3@latest` instead.
+## What This Fork Adds
 
-### Desktop app
+- **Seventh Built-in Provider**: `commandcode` appears alongside Codex, Claude Code, Cursor, Grok Build, OpenCode, and Antigravity in Settings and thread selectors.
+- **Streaming NDJSON Turns**: Real-time tool execution progress, file changes, and assistant responses streamed directly from the `cmd` subprocess.
+- **Session Continuation**: Transparent multi-turn resumption using `--resume <session-id>`.
+- **Dynamic Model Catalog**: Models available on your Command Code account (via `cmd --list-models`) are detected and presented in the model selector.
+- **Permission Modes**: Seamless mapping between T3 Code runtime modes and Command Code permission modes (`standard`, `accept-edits`, `plan`, and `yolo`).
+- **Context Compaction**: Native `/compact` support mapped to thread compaction.
+- **Text Generation**: Generates thread titles, commit messages, PR descriptions, and branch names using one-shot headless queries.
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+---
 
-#### Windows (`winget`)
+## Installing & Developing from Source
 
-```bash
-winget install T3Tools.T3Code
-```
-
-#### macOS (Homebrew)
+If you prefer building and installing directly from a local clone:
 
 ```bash
-brew install --cask t3-code
-```
+# 1. Clone the repository
+git clone https://github.com/abhigyan-chatterjee/commandcode-t3.git
+cd commandcode-t3
 
-#### Debian, Ubuntu (`.deb`)
-
-Download the `.deb` from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), then:
-
-```bash
-sudo apt install ./T3-Code-*.deb
-```
-
-#### Arch Linux (AUR)
-
-Stable:
-
-```bash
-yay -S t3code-bin
-```
-
-Nightly:
-
-```bash
-yay -S t3code-nightly-bin
-```
-
-The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
-
-## Some notes
-
-We are very very early in this project. Expect bugs.
-
-We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
-
-## Documentation
-
-Full docs live in [docs/](./docs). There's no docs site yet.
-
-- [Install and first run](./docs/user/install.md)
-- [Permission modes](./docs/user/permission-modes.md)
-- [Keyboard shortcuts](./docs/user/keybindings.md)
-- [Project settings](./docs/user/project-settings.md)
-- [Remote access from a phone or another machine](./docs/user/remote-access.md)
-- [Keeping app and server in sync](./docs/user/updating.md)
-- [Source control integrations](./docs/user/source-control.md)
-- Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
-- [Run T3 Code as a background service](./docs/user/background-service.md)
-
-Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
-
-## If you REALLY want to contribute still.... read this first
-
-### Install `vp`
-
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
-
-#### macOS / Linux
-
-```bash
-curl -fsSL https://vite.plus | bash
-```
-
-#### Windows
-
-```bash
-irm https://vite.plus/ps1 | iex
-```
-
-Checkout their getting started guide for more information: https://viteplus.dev/guide/
-
-### Install dependencies
-
-```bash
+# 2. Install dependencies (requires global `vp` / Vite+)
+npm install -g vite-plus
 vp i
+
+# 3. Build and install into ~/.t3 and ~/.local/bin/t3
+./scripts/install-local.sh
+
+# 4. Or run the dev server without installing
+vp run dev
 ```
 
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before reporting a bug or opening a PR.
+---
 
-Have a feature request? Start an [Ideas discussion](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
+## Keeping Up to Date with Upstream T3 Code
 
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+This fork tracks upstream [pingdotgg/t3code](https://github.com/pingdotgg/t3code) changes automatically while preserving Command Code modifications:
+
+1. **Automated Daily Sync**: A GitHub Actions workflow ([`.github/workflows/sync-upstream.yml`](./.github/workflows/sync-upstream.yml)) runs every day at 04:00 UTC to fetch and merge `upstream/main` into this repository. If a conflict ever occurs, an issue is automatically opened for maintainer review.
+2. **Manual Sync Script**: To sync your local branch with upstream at any time:
+   ```bash
+   ./scripts/sync-upstream.sh
+   ```
+
+---
+
+## License
+
+MIT (inherited from upstream `pingdotgg/t3code`).

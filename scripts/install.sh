@@ -142,6 +142,23 @@ else
   fail "sha256sum or shasum is required"
 fi
 
+install_from_source() {
+  step "No pre-built binary release available for ${repo}. Installing from source..."
+  command -v git >/dev/null 2>&1 || fail "git is required to build from source"
+  command -v node >/dev/null 2>&1 || fail "Node.js (v24+) is required to build from source"
+  src_dir="${t3_home}/src/commandcode-t3"
+  if [ -d "$src_dir/.git" ]; then
+    step "Updating source checkout at ${src_dir}..."
+    (cd "$src_dir" && git fetch origin && git checkout -q -f main && git reset --hard origin/main)
+  else
+    step "Cloning ${repo} into ${src_dir}..."
+    mkdir -p "$(dirname "$src_dir")"
+    git clone --depth 1 "https://github.com/${repo}.git" "$src_dir"
+  fi
+  (cd "$src_dir" && ./scripts/install-local.sh)
+  exit 0
+}
+
 channel="${T3CODE_CHANNEL:-stable}"
 version="${T3CODE_VERSION:-}"
 if [ -z "$version" ]; then
@@ -154,10 +171,13 @@ if [ -z "$version" ]; then
     *) fail "T3CODE_CHANNEL must be stable, nightly, or preview" ;;
   esac
   tmp_index="$(mktemp)"
-  fetch "https://api.github.com/repos/${repo}/releases?per_page=100" "$tmp_index"
-  version="$(sed -n "s/.*\"tag_name\": *\"${tag_pattern}\".*/\1/p" "$tmp_index" | head -n 1)"
+  if fetch "https://api.github.com/repos/${repo}/releases?per_page=100" "$tmp_index"; then
+    version="$(sed -n "s/.*\"tag_name\": *\"${tag_pattern}\".*/\1/p" "$tmp_index" | head -n 1)"
+  fi
   rm -f "$tmp_index"
-  [ -n "$version" ] || fail "could not find a ${channel} release; set T3CODE_VERSION"
+  if [ -z "$version" ]; then
+    install_from_source
+  fi
 fi
 case "$version" in
   *-preview.*)
@@ -193,7 +213,7 @@ else
   fetch_status=0
   fetch "${base_url}/v${version}/SHA256SUMS" "${staging}/SHA256SUMS" || fetch_status=$?
   if [ "$fetch_status" -eq 44 ]; then
-    fail "t3 ${version} has no release archive for ${platform}-${arch}; releases before the self-contained CLI can only be installed with \`npm install -g t3@${version}\`"
+    install_from_source
   elif [ "$fetch_status" -ne 0 ]; then
     fail "could not download the release checksums"
   fi
