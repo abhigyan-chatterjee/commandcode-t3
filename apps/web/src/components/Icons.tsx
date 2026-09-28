@@ -273,6 +273,24 @@ export const GrokIcon: Icon = ({ className, ...props }) => (
   </svg>
 );
 
+export const CommandCodeIcon: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    {/* Command Code mark: a terminal prompt chevron with a trailing caret. */}
+    <path d="M5 7l5 5-5 5" />
+    <path d="M12.5 17H19" />
+  </svg>
+);
+
 export const TraeIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 24 24" fill="currentColor">
     {/* Back rectangle: left strip + bottom strip drawn separately — empty bottom-left corner is the gap between them */}

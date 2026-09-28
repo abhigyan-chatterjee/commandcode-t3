@@ -1,6 +1,7 @@
 import {
   ClaudeSettings,
   CodexSettings,
+  CommandCodeSettings,
   type ExecutionEnvironmentPlatformOs,
   type ServerProvider,
   type ServerSettings,
@@ -10,6 +11,7 @@ import * as Schema from "effect/Schema";
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
+const decodeCommandCodeSettings = Schema.decodeUnknownOption(CommandCodeSettings);
 const SAFE_SHELL_BINARY_PATTERN = /^[A-Za-z0-9_./:\\-]+$/;
 
 function quoteProviderBinary(
@@ -123,6 +125,14 @@ export function resolveOnboardingProviderLoginCommand(
     );
     const binaryPath = Option.isSome(config) ? config.value.binaryPath : "codex";
     return `${quoteProviderBinary(binaryPath, "codex", platform)} login`;
+  }
+
+  if (provider.driver === "commandcode") {
+    const config = decodeCommandCodeSettings(
+      instance ? (instance.config ?? {}) : settings.providers.commandcode,
+    );
+    const binaryPath = Option.isSome(config) ? config.value.binaryPath : "cmd";
+    return `${quoteProviderBinary(binaryPath, "cmd", platform)} login`;
   }
 
   return provider.driver;
