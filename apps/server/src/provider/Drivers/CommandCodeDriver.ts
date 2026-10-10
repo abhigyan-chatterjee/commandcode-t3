@@ -101,7 +101,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
   driverKind: DRIVER_KIND,
   metadata: {
     displayName: "Command Code",
-    supportsMultipleInstances: false,
+    supportsMultipleInstances: true,
   },
   configSchema: CommandCodeSettings,
   defaultConfig: (): CommandCodeSettings => decodeCommandCodeSettings({}),
