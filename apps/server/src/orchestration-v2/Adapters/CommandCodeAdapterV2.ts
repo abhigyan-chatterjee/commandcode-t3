@@ -183,9 +183,7 @@ function makeCommandCodeAcpRuntime(options: CommandCodeAdapterV2Options) {
     });
 }
 
-export function makeCommandCodeAcpAdapterFlavor(
-  options: CommandCodeAdapterV2Options,
-): AcpAdapterV2Flavor {
+function makeCommandCodeAcpAdapterFlavor(options: CommandCodeAdapterV2Options): AcpAdapterV2Flavor {
   return {
     driver: COMMAND_CODE_PROVIDER,
     runtimeHarness: "Command Code",
@@ -200,7 +198,7 @@ export function makeCommandCodeAcpAdapterFlavor(
   };
 }
 
-export function makeCommandCodeAdapterV2(options: CommandCodeAdapterV2Options) {
+function makeCommandCodeAdapterV2(options: CommandCodeAdapterV2Options) {
   return makeAcpAdapterV2({
     instanceId: options.instanceId,
     flavor: makeCommandCodeAcpAdapterFlavor(options),

@@ -98,7 +98,7 @@ const runCommandCodeCliCommand = (
     );
   });
 
-export interface CommandCodeModelsCliOutput {
+interface CommandCodeModelsCliOutput {
   /** True or false when the CLI printed a login line, null when it printed neither. */
   readonly authenticated: boolean | null;
   readonly models: ReadonlyArray<ServerProviderModel>;
@@ -148,7 +148,7 @@ function modelFromSlug(slug: string): ServerProviderModel {
  * The command's exact layout is not guaranteed, so anything unparseable
  * yields an empty list rather than invented slugs.
  */
-export function parseCommandCodeModelsCliOutput(output: string): CommandCodeModelsCliOutput {
+function parseCommandCodeModelsCliOutput(output: string): CommandCodeModelsCliOutput {
   const authenticated =
     /logged in|authenticated|signed in/i.test(output) &&
     !/not logged in|not authenticated|unauthenticated|logged out/i.test(output)
@@ -185,7 +185,7 @@ export function parseCommandCodeModelsCliOutput(output: string): CommandCodeMode
   return { authenticated, models };
 }
 
-export function parseCommandCodeAuthStatus(output: string): ServerProviderAuth {
+function parseCommandCodeAuthStatus(output: string): ServerProviderAuth {
   if (/not logged in|not authenticated|unauthenticated|logged out/i.test(output)) {
     return { status: "unauthenticated" };
   }
