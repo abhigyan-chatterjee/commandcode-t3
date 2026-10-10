@@ -17,8 +17,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient } from "effect/unstable/http";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
 
 import { makeCommandCodeTextGeneration } from "../../textGeneration/CommandCodeTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -26,13 +26,16 @@ import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
-import { makeCommandCodeAdapter } from "../Layers/CommandCodeAdapter.ts";
+import {
+  CommandCodeAdapterV2Driver,
+  type CommandCodeAdapterV2DriverEnv,
+} from "../../orchestration-v2/Adapters/CommandCodeAdapterV2.ts";
 import {
   buildInitialCommandCodeProviderSnapshot,
   checkCommandCodeProviderStatus,
   enrichCommandCodeSnapshot,
-} from "../Layers/CommandCodeProvider.ts";
-import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
+} from "../CommandCodeProvider.ts";
+import { ProviderEventLoggers } from "../ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import {
@@ -84,6 +87,7 @@ const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
 export type CommandCodeDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
+  | CommandCodeAdapterV2DriverEnv
   | Crypto.Crypto
   | FileSystem.FileSystem
   | HttpClient.HttpClient
@@ -138,11 +142,24 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
         continuationGroupKey: continuationIdentity.continuationKey,
       });
 
-      const adapter = yield* makeCommandCodeAdapter(effectiveConfig, {
+      const orchestrationAdapter = yield* CommandCodeAdapterV2Driver.create({
         instanceId,
-        environment: processEnv,
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
-      });
+        displayName,
+        accentColor,
+        environment,
+        enabled,
+        config,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Failed to build Command Code orchestration adapter.",
+              cause,
+            }),
+        ),
+      );
       const textGeneration = yield* makeCommandCodeTextGeneration(effectiveConfig, processEnv);
 
       // Start the TTL-gated manifest refresh without delaying provider
@@ -204,7 +221,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
         accentColor,
         enabled,
         snapshot,
-        adapter,
+        orchestrationAdapter,
         textGeneration,
       } satisfies ProviderInstance;
     }),

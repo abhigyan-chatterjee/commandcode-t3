@@ -1,41 +1,54 @@
 # Command Code
 
-Command Code (`cmd`) runs as a headless Command Code process per turn. T3 Code
-starts the session, streams tool activity and the reply, and resumes the same
-Command Code session for every following turn in the thread.
-[Provider setup](./install.md#providers) covers installation, Settings > Providers,
-and custom binaries.
+Command Code (`cmd`) runs as an [Agent Client Protocol](https://agentclientprotocol.com)
+server. T3 Code starts `cmd acp`, opens a session for the thread's project
+directory, and speaks ACP over stdio. The whole Command Code harness — tools,
+skills, the permission engine, sessions, and the model catalog — stays in
+Command Code; T3 Code owns the transport and the timeline.
+[Provider setup](./install.md#providers) covers installation, Settings >
+Providers, and custom binaries.
 
 ## Permissions
 
-Command Code headless runs cannot ask questions mid-turn, so T3 Code starts each
-turn with the thread's runtime mode translated to Command Code's permission
-mode:
+Command Code answers T3 Code's permission requests through ACP, so prompts are
+interactive: allow once, allow always, reject once, or reject always. An
+"always" choice is remembered per tool for the thread.
 
-| Thread runtime mode | Command Code permission mode |
-| ------------------- | ---------------------------- |
-| Approval required   | `default`                    |
-| Auto-accept edits   | `accept-edits`               |
-| Auto                | `accept-edits`               |
-| Full access         | `yolo`                       |
+The thread's runtime mode selects the Command Code session mode:
 
-Plan mode starts Command Code with `--permission-mode plan`. To approve commands
-without stopping the run, pick a more permissive runtime mode for the thread or
-pre-approve commands in the project's `.commandcode/settings.json`.
+| Thread runtime mode | Command Code session mode |
+| ------------------- | ------------------------- |
+| Approval required   | `default`                 |
+| Auto-accept edits   | `auto-accept`             |
+| Auto                | `auto-accept`             |
+| Full access         | `bypass`                  |
+
+Plan mode switches the session to `plan`; the mode indicator follows the engine.
 
 ## Sessions and history
 
-Every turn is committed to Command Code's session store at
-`~/.commandcode/projects/`. Threads keep their own Command Code session id, so
-following turns continue the same conversation with `--resume`. Headless
-sessions stay out of Command Code's interactive resume picker; use
-`/session-file` in a terminal session if you need the transcript path.
+Every thread is a real Command Code session with a durable id, so a thread
+reopened in T3 Code resumes the same transcript shown by `cmd --resume`, and a
+session started in the terminal reopens in T3 Code. One `cmd acp` process serves
+one project directory; a thread for a different directory gets its own process.
 
-## Models
+## Models and effort
 
-The model list comes from `cmd --list-models`. Add custom entries in the
-instance's settings to use models the CLI does not list. The selected model is
-passed to every turn with `-m`; switching models applies from the next turn.
+The picker lists the Command Code model catalog. The choice belongs to the
+thread and never changes another thread or your terminal default. Models with a
+reasoning knob also expose an effort option.
+
+## MCP servers
+
+Servers you configure in Command Code (`cmd mcp`, `.mcp.json`, settings
+`mcp.servers`) load as in the terminal. Servers configured in T3 Code are
+connected beside them, and the model sees one tool list.
+
+## Slash commands
+
+Your project and user commands (`.commandcode/commands/*.md`), skills, mod
+commands, and `/compact` are available. A command sent as the whole message runs
+it; a skill's body rides into the turn as hidden context.
 
 ## Updating Command Code
 
@@ -44,9 +57,9 @@ npm package. The updater runs `cmd update` against the resolved binary.
 
 ## Known limitations
 
-- Mid-turn approval prompts are not surfaced; the turn runs under the
-  permission mode above until it finishes.
-- Interrupting a turn stops the Command Code process. Command Code commits
-  turns atomically, so an interrupted turn leaves no partial transcript.
-- Conversation rollback is not available yet. File-level restores still work
-  through T3 Code checkpoints.
+- Command Code reads, writes, and runs commands through its own permission
+  engine; the editor's file and terminal services are not used, so unsaved
+  buffers are not visible to the agent.
+- Audio input is not supported. Images and file mentions are.
+- A `cmd acp` process serves a single project directory; a thread for another
+  directory is refused until the others close.

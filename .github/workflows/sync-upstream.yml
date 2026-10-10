@@ -1,9 +1,8 @@
 name: Sync with Upstream
 
 on:
-  schedule:
-    # Run daily at 04:00 UTC
-    - cron: "0 4 * * *"
+  # Scheduled autobuilds are intentionally disabled on this fork; run the sync
+  # manually from the Actions tab when you want to pull upstream changes.
   workflow_dispatch:
 
 jobs:
@@ -42,6 +41,9 @@ jobs:
 
       - name: Notify on conflict
         if: steps.merge.outputs.merged == 'false'
+        # A fork may have Issues disabled; a failed notification must not turn a
+        # detected conflict into an additional workflow failure.
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |

@@ -10,6 +10,10 @@ import {
 } from "./Adapters/ClaudeAdapterV2.ts";
 import { CodexAdapterV2Driver, type CodexAdapterV2DriverEnv } from "./Adapters/CodexAdapterV2.ts";
 import {
+  CommandCodeAdapterV2Driver,
+  type CommandCodeAdapterV2DriverEnv,
+} from "./Adapters/CommandCodeAdapterV2.ts";
+import {
   CursorAdapterV2Driver,
   type CursorAdapterV2DriverEnv,
 } from "./Adapters/CursorAdapterV2.ts";
@@ -25,6 +29,7 @@ export type BuiltInProviderAdapterDriversV2Env =
   | AcpRegistryAdapterV2DriverEnv
   | ClaudeAdapterV2DriverEnv
   | CodexAdapterV2DriverEnv
+  | CommandCodeAdapterV2DriverEnv
   | CursorAdapterV2DriverEnv
   | GrokAdapterV2DriverEnv
   | OpenCodeAdapterV2DriverEnv
@@ -35,6 +40,7 @@ const BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2: ReadonlyArray<
 > = [
   CodexAdapterV2Driver,
   ClaudeAdapterV2Driver,
+  CommandCodeAdapterV2Driver,
   CursorAdapterV2Driver,
   OpenCodeAdapterV2Driver,
   GrokAdapterV2Driver,
