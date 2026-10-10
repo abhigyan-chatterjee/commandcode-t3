@@ -43,7 +43,7 @@ Before using Command Code with T3 Code, please review Command Code's [Terms of S
 
 ## What This Fork Adds
 
-- **Seventh Built-in Provider**: `commandcode` appears alongside Codex, Claude Code, Cursor, Grok Build, OpenCode, and Antigravity in Settings and thread selectors.
+- **Built-in Provider**: `commandcode` appears alongside Codex, Claude Code, Cursor, Grok Build, OpenCode, Antigravity, and Pi in Settings and thread selectors.
 - **Streaming NDJSON Turns**: Real-time tool execution progress, file changes, and assistant responses streamed directly from the `cmd` subprocess.
 - **Session Continuation**: Transparent multi-turn resumption using `--resume <session-id>`.
 - **Dynamic Model Catalog**: Models available on your Command Code account (via `cmd --list-models`) are detected and presented in the model selector.
@@ -64,6 +64,7 @@ cd commandcode-t3
 
 # 2. Install dependencies (requires global `vp` / Vite+)
 npm install -g vite-plus
+
 vp i
 
 # 3. Build and install into ~/.t3 and ~/.local/bin/t3
@@ -72,6 +73,70 @@ vp i
 # 4. Or run the dev server without installing
 vp run dev
 ```
+
+## Desktop app
+
+Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+
+#### Windows (`winget`)
+
+```bash
+winget install T3Tools.T3Code
+```
+
+#### macOS (Homebrew)
+
+```bash
+brew install --cask t3-code
+```
+
+#### Debian, Ubuntu (`.deb`)
+
+Download the `.deb` from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), then:
+
+```bash
+sudo apt install ./T3-Code-*.deb
+```
+
+#### Arch Linux (AUR)
+
+Stable:
+
+```bash
+yay -S t3code-bin
+```
+
+Nightly:
+
+```bash
+yay -S t3code-nightly-bin
+```
+
+The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
+
+## Some notes
+
+We are very very early in this project. Expect bugs.
+
+We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
+
+## Documentation
+
+Full docs live in [docs/](./docs). There's no docs site yet.
+
+- [Install and first run](./docs/user/install.md)
+- [Permission modes](./docs/user/permission-modes.md)
+- [Keyboard shortcuts](./docs/user/keybindings.md)
+- [Project settings](./docs/user/project-settings.md)
+- [Appearance preferences](./docs/user/appearance.md)
+- [Remote access from a phone or another machine](./docs/user/remote-access.md)
+- [Connect Claude Code, Codex, ChatGPT and other agents over MCP](./docs/user/outside-agents.md)
+- [Keeping app and server in sync](./docs/user/updating.md)
+- [Source control integrations](./docs/user/source-control.md)
+- Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
+- [Run T3 Code as a background service](./docs/user/background-service.md)
+
+Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
 
 ---
 
