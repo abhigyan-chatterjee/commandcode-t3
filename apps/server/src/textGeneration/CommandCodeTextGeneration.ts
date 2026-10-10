@@ -13,7 +13,7 @@ import {
   type CommandCodeSettings,
   type ModelSelection,
 } from "@t3tools/contracts";
-import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import { formatGeneratedBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
@@ -112,7 +112,9 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       "--output-format",
       "json",
       "--skip-onboarding",
-      ...(model ? ["-m", model] : []),
+      // "default" is Command Code's own-model sentinel; the CLI has no such
+      // `-m` value, so leave the flag off and let it pick.
+      ...(model && model !== "default" ? ["-m", model] : []),
     ];
     const binary = commandCodeSettings.binaryPath || "cmd";
     const spawnCommand = yield* resolveSpawnCommand(binary, args, { env: environment });
@@ -259,6 +261,7 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       const { prompt, outputSchema } = buildBranchNamePrompt({
         message: input.message,
         attachments: input.attachments,
+        naming: input.naming,
       });
 
       const generated = yield* runCommandCodeJson({
@@ -270,7 +273,7 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       });
 
       return {
-        branch: sanitizeBranchFragment(generated.branch),
+        branch: formatGeneratedBranchName(generated.branch, input.naming),
       };
     });
 

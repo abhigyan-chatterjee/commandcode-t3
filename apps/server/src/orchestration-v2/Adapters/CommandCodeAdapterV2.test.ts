@@ -43,9 +43,11 @@ describe("CommandCodeAdapterV2", () => {
     );
   });
 
-  it("declares live model/mode switching and editor MCP servers over ACP", () => {
+  it("declares live model switching, editor MCP servers, and session reload on mode change", () => {
     assert.isTrue(CommandCodeProviderCapabilitiesV2.sessions.supportsModelSwitchInSession);
-    assert.isTrue(CommandCodeProviderCapabilitiesV2.sessions.supportsRuntimeModeSwitchInSession);
+    // The shared ACP harness only re-applies config on model/interaction-mode
+    // changes, so a runtime-mode change must recycle the session to take effect.
+    assert.isFalse(CommandCodeProviderCapabilitiesV2.sessions.supportsRuntimeModeSwitchInSession);
     assert.isTrue(CommandCodeProviderCapabilitiesV2.tools.supportsMcpTools);
     assert.isTrue(CommandCodeProviderCapabilitiesV2.threads.canReadThreadSnapshot);
   });

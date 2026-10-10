@@ -2,8 +2,8 @@
  * CommandCodeDriver — `ProviderDriver` for the Command Code CLI (`cmd`).
  *
  * Mirrors `GrokDriver`: a plain value whose `create()` returns one
- * `ProviderInstance` bundling `snapshot` / `adapter` / `textGeneration`
- * closures captured over the per-instance `CommandCodeSettings`.
+ * `ProviderInstance` bundling `snapshot` / `orchestrationAdapter` /
+ * `textGeneration` closures captured over the per-instance `CommandCodeSettings`.
  *
  * The update resolver treats the resolved `cmd` executable as its own updater
  * (`cmd update`); the npm registry package `command-code` stays the source for
@@ -147,7 +147,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
         accentColor,
         environment,
         enabled,
-        config,
+        config: effectiveConfig,
       }).pipe(
         Effect.mapError(
           (cause) =>

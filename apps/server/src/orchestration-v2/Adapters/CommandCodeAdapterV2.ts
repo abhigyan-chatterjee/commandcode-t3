@@ -77,7 +77,7 @@ export const CommandCodeProviderCapabilitiesV2 = {
     ...AcpProviderCapabilitiesV2.sessions,
     // The model picker and the mode control are live over ACP.
     supportsModelSwitchInSession: true,
-    supportsRuntimeModeSwitchInSession: true,
+    supportsRuntimeModeSwitchInSession: false,
   },
   threads: {
     ...AcpProviderCapabilitiesV2.threads,
@@ -165,6 +165,10 @@ function makeCommandCodeAcpRuntime(options: CommandCodeAdapterV2Options) {
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
+          // Command Code reads and writes through its own permission engine, so
+          // grant the T3 attachments directory as an extra workspace root or it
+          // cannot open pasted files referenced by absolute path.
+          additionalDirectories: [options.serverConfig.attachmentsDir],
           spawn: {
             command: options.settings.binaryPath || "cmd",
             args: ["acp", ...commandCodeLaunchArgs(options.settings)],
