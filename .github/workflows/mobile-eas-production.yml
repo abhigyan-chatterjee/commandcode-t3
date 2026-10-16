@@ -90,6 +90,12 @@ concurrency:
 jobs:
   production:
     name: EAS ${{ inputs.profile || 'production' }} ${{ github.event_name == 'push' && 'auto' || inputs.mode }}
+    # EAS builds sign with the maintainers' Expo and release-app credentials and
+    # ship to the App Store / Play Store, so a fork cannot run them: without this
+    # guard every push touching the mobile packages queued a production build
+    # that could only fail. Manual dispatch still works after configuring your
+    # own credentials.
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'pingdotgg/t3code'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     permissions:
       contents: read
