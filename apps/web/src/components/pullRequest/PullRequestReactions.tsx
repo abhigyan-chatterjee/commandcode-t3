@@ -23,18 +23,16 @@ import {
 } from "./pullRequestReactions.logic";
 
 const PILL_CLASS =
-  "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring";
+  "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
 
 const EMPTY_PENDING: ReadonlyMap<PullRequestReactionContent, boolean> = new Map();
 
-/** What the host last said, so a press in flight is forgotten the moment the real counts land. */
 function reactionsSignature(reactions: ReadonlyArray<PullRequestReaction>): string {
   return reactions
     .map((reaction) => `${reaction.content}:${reaction.count}:${reaction.viewerHasReacted ? 1 : 0}`)
     .join(" ");
 }
 
-/** Reaction counts and an always-visible picker, routed to the supplied host subject. */
 export function PullRequestReactionBar({
   reactions,
   canReact,
@@ -148,7 +146,7 @@ export function PullRequestReactionBar({
                     aria-pressed={reacted}
                     aria-label={pullRequestReactionName(content)}
                     className={cn(
-                      "flex size-7 items-center justify-center rounded-md text-base outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+                      "flex size-7 items-center justify-center rounded-md text-base outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                       reacted && "bg-primary/10",
                     )}
                     onClick={() => {

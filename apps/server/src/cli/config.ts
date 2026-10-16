@@ -84,7 +84,6 @@ const tailscaleServePortFlag = Flag.Int("tailscale-serve-port").pipe(
   Flag.optional,
 );
 
-// Trace file location, shared by the server and `t3 trace summary`.
 export const traceFileConfig = Config.String("T3CODE_TRACE_FILE").pipe(
   Config.option,
   Config.map(Option.getOrUndefined),
@@ -360,6 +359,7 @@ export const resolveServerConfig = (
     );
     const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
     const desktopBootstrapSecret = bootstrap?.desktopBootstrapSecret;
+    const shellEnvironmentPrepared = bootstrap?.shellEnvironmentPrepared;
     const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
     const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
     const desktopBrowserFd = bootstrap?.desktopBrowserFd;
@@ -410,8 +410,6 @@ export const resolveServerConfig = (
 
     const otel = yield* OtelEnvironment.load;
 
-    // T3 Code's own OTLP variables name no signal, so the one answer they give
-    // is the answer for all three.
     const signalExport: SignalExport = {
       protocol: env.otlpProtocol,
       headers: env.otlpHeaders,
@@ -468,6 +466,7 @@ export const resolveServerConfig = (
       startupPresentation,
       desktopBootstrapToken,
       ...(desktopBootstrapSecret === undefined ? {} : { desktopBootstrapSecret }),
+      ...(shellEnvironmentPrepared === undefined ? {} : { shellEnvironmentPrepared }),
       desktopTelemetryFd,
       desktopTelemetryControlFd,
       desktopBrowserFd,

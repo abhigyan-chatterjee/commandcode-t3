@@ -11,15 +11,13 @@ export interface BrowserViewportLayout {
   readonly canvasHeight: number;
   readonly viewportX: number;
   readonly viewportY: number;
-  /** Visible footprint inside the preview panel after fit-to-panel scaling. */
   readonly viewportWidth: number;
   readonly viewportHeight: number;
-  /** Presentation-only scale; the guest keeps its requested CSS viewport. */
   readonly viewportScale: number;
   readonly fillsPanel: boolean;
 }
 
-export const BROWSER_DEVICE_TOOLBAR_HEIGHT = 32;
+export const BROWSER_DEVICE_TOOLBAR_HEIGHT = 38;
 export const BROWSER_VIEWPORT_RESIZE_RAIL_SIZE = 10;
 
 export type BrowserViewportResizeDirection =

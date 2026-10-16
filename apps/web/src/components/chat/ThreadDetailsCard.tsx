@@ -7,11 +7,12 @@ import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
 import { useChatCanvas } from "./ChatCanvasContext";
 import {
+  THREAD_DETAILS_CARD_GAP,
   resolveThreadDetailsCardDensity,
   resolveThreadDetailsCardLayout,
 } from "./threadDetailsCardLayout";
+import { observeResize } from "../../lib/observeResize";
 
-/** One card owns its placement and folds content only when that content cannot fit. */
 export function ThreadDetailsCard({
   threadRef,
   anchor,
@@ -31,6 +32,7 @@ export function ThreadDetailsCard({
         container: canvas.container,
         lane: canvas.lane,
         frame: null,
+        topInset: canvas.detailsCardTopInset,
       })
     : null;
   const placement = canvas
@@ -39,9 +41,11 @@ export function ThreadDetailsCard({
         lane: canvas.lane,
         frame: canvas.layout.frame,
         overlapsDetailsCard: canvas.layout.overlapsDetailsCard,
+        topInset: canvas.detailsCardTopInset,
       })
     : null;
   const mode = placement ? "inline" : "popover";
+  const topInset = canvas?.detailsCardTopInset ?? 0;
   const inlineOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
   );
@@ -84,13 +88,9 @@ export function ThreadDetailsCard({
   useLayoutEffect(() => {
     const element = contentElement;
     if (!element || density === "essential") return;
-    // Measure the single content tree before the scroll viewport clips it. Retain each
-    // observed height so increasing available space restores the detail it can hold.
     const measure = () => {
       const frame = element.closest<HTMLElement>("[data-thread-details-card]");
       const next = element.offsetHeight + (frame ? frame.offsetHeight - frame.clientHeight : 0);
-      // Lineage scrolls as it expands. Counting it toward density would hide
-      // the section and workspace controls when the user asks to see more rows.
       const lineage = element.querySelector<HTMLElement>("[data-thread-relationships-panel]");
       const fittingHeight = next - (lineage?.offsetHeight ?? 0);
       setMeasurements((current) => {
@@ -113,9 +113,7 @@ export function ThreadDetailsCard({
       });
     };
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
+    return observeResize(element, measure);
   }, [contentElement, density, measurementKey]);
   const card = (
     <div
@@ -136,17 +134,34 @@ export function ThreadDetailsCard({
     <Popover
       handle={handle}
       open={mode === "popover" && popoverOpen}
-      onOpenChange={(open) =>
-        useRightPanelStore.getState().setThreadPanelOpen(threadRef, "popover", open)
-      }
+      onOpenChange={(open, details) => {
+        const target =
+          details.reason === "focus-out"
+            ? (details.event as FocusEvent).relatedTarget
+            : details.reason === "outside-press"
+              ? details.event.target
+              : null;
+        if (!open && target instanceof Element && target.closest("[data-thread-find-bar]")) {
+          details.cancel();
+          return;
+        }
+        useRightPanelStore.getState().setThreadPanelOpen(threadRef, "popover", open);
+      }}
     >
       {placement ? (
         inlineOpen ? (
           <aside
             aria-label="Thread details"
-            className="absolute z-20"
+            // Slides down to make room for the find bar, but returns in the same frame
+            // the bar closes: a floating preview below moves up at once and would
+            // otherwise overlap the card mid-slide.
+            className={cn(
+              "absolute z-20",
+              topInset > 0 &&
+                "transition-[top] duration-150 ease-out motion-reduce:transition-none",
+            )}
             style={{
-              left: placement.x,
+              right: placement.right,
               top: placement.y,
               width: placement.width,
               maxHeight: height,
@@ -161,10 +176,11 @@ export function ThreadDetailsCard({
         <PopoverPopup
           anchor={anchor}
           align="end"
-          alignOffset={0}
+          // Lines the card up with the find bar: the panel pads its card by 8px.
+          alignOffset={THREAD_DETAILS_CARD_GAP - 8}
           collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}
           side="bottom"
-          sideOffset={0}
+          sideOffset={topInset}
           variant="panel"
           padding="none"
         >

@@ -9,19 +9,15 @@ import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { groupGitHubAccounts, nextGitHubHosts } from "./GitHubAccountSettings.logic";
+import { readGitHubSettings } from "@t3tools/client-runtime/source-control-clients";
 import { redactedPlaceholder } from "./RedactedSensitiveText";
 
 /** Sentinel select value for "follow gh's active login"; logins never contain spaces. */
 const ACTIVE_ACCOUNT = "active gh account";
 
-/**
- * A login, blurred like RedactedSensitiveText until the panel reveals it. Plain text, not a
- * button, so it can sit inside select options; one panel toggle reveals every login.
- */
 function RedactedLogin(props: {
   readonly account: string;
   readonly revealed: boolean;
-  /** Distinguishes hidden logins from each other for a screen reader, e.g. "Account 2". */
   readonly label?: string;
 }) {
   return props.revealed ? (
@@ -36,10 +32,6 @@ function RedactedLogin(props: {
   );
 }
 
-/**
- * Per-host GitHub choices for one environment: turn a host off, or pin which of the
- * logins `gh` holds is used instead of its active one. Changes save immediately.
- */
 export function GitHubAccountSettings({
   environmentId,
   auth,
@@ -49,7 +41,8 @@ export function GitHubAccountSettings({
   readonly auth: SourceControlProviderAuth;
   readonly onSaved: () => void;
 }) {
-  const hosts = useEnvironmentSettings(environmentId, (settings) => settings.github.hosts);
+  const github = useEnvironmentSettings(environmentId, readGitHubSettings);
+  const hosts = github.hosts;
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: "save GitHub account settings",
   });
@@ -65,7 +58,11 @@ export function GitHubAccountSettings({
     try {
       const result = await updateSettings({
         environmentId,
-        input: { patch: { github: { hosts: nextGitHubHosts(hosts, host, change) } } },
+        input: {
+          patch: {
+            sourceControlHosts: { github: { hosts: nextGitHubHosts(hosts, host, change) } },
+          },
+        },
       });
       if (result._tag === "Success") onSaved();
     } finally {

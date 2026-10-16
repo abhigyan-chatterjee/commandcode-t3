@@ -2,6 +2,7 @@ import {
   WS_METHODS,
   PullRequestRef,
   PullRequestInvalidateInput,
+  PullRequestState,
   type EnvironmentId,
   type PullRequestRoutingResult,
   type PullRequestRoutingIdentityResult,
@@ -43,6 +44,8 @@ const reads = new Set<string>([
   WS_METHODS.pullRequestsReviewerCandidates,
   WS_METHODS.pullRequestsLabelCandidates,
 ]);
+// Review guides are not routed: each server keeps its own, so another server answering would
+// report none, or start a run nobody on the pull request's own server can see.
 const writes = new Set<string>([
   WS_METHODS.pullRequestsSetFilesViewed,
   WS_METHODS.pullRequestsRunAction,
@@ -57,6 +60,7 @@ const writes = new Set<string>([
   WS_METHODS.pullRequestsSetLabels,
 ]);
 const isRef = Schema.is(PullRequestRef);
+const hasState = Schema.is(Schema.Struct({ state: PullRequestState }));
 const isInvalidation = Schema.is(PullRequestInvalidateInput);
 const readTimeout = (environmentId: EnvironmentId) =>
   Effect.timeoutOrElse({
@@ -86,7 +90,6 @@ type PendingMetadata<A> = WeakMap<RpcSession, Map<string, Deferred.Deferred<Exit
 const pendingRouting: PendingMetadata<PullRequestRoutingResult | null> = new WeakMap();
 const pendingIdentities: PendingMetadata<PullRequestRoutingIdentityResult | null> = new WeakMap();
 
-/** Share only active read probes. Completed probes and mutations always read the current account. */
 function shareMetadataRead<A, R>(
   pending: PendingMetadata<A>,
   key: string,
@@ -136,7 +139,6 @@ function isLocal(entry: ConnectionCatalogEntry): boolean {
   }
 }
 
-/** A guard rejection is returned before the operation starts. Other write failures are ambiguous. */
 function rejectedBeforeDispatch(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -207,6 +209,21 @@ const invalidateTarget = Effect.fn("PullRequestRouting.invalidateTarget")(functi
     { concurrency: 3, discard: true },
   );
 });
+
+/**
+ * The origin owns the threads linked to this pull request, but a routed read never reaches it.
+ * Tell it which state the read saw so it checks again.
+ */
+const reportState = (
+  { allowStale: _allowStale, expectedAccountId: _expectedAccountId, ...reference }: PullRequestRef,
+  state: PullRequestState,
+) =>
+  request(WS_METHODS.pullRequestsReportState, { reference, state }).pipe(
+    Effect.timeoutOption("5 seconds"),
+    Effect.ignore,
+    Effect.forkDetach,
+    Effect.asVoid,
+  );
 
 /** Credentials stay on their environments. Only a verified host and account cross the wire. */
 export function createPullRequestRouter() {
@@ -332,7 +349,6 @@ export function createPullRequestRouter() {
           identityProbe,
         )
       : identityProbe;
-    // Old servers and unknown accounts retain the existing path.
     if (identity === null || identity.provider !== "github") return yield* finish(source);
 
     const routedInput = {
@@ -356,6 +372,11 @@ export function createPullRequestRouter() {
         ? guardedSource
         : registry.run(id, request(tag, routedInput))
       ).pipe(
+        Effect.tap((result) =>
+          id !== origin.target.environmentId && hasState(result)
+            ? reportState(ref, result.state)
+            : Effect.void,
+        ),
         Effect.tap(() =>
           Effect.sync(() => {
             const entry = used.get(refKey) ?? {

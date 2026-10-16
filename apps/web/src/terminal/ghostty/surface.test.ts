@@ -42,12 +42,44 @@ vi.mock("./vendor/ghostty-write-pty.wasm?url&no-inline", async () => ({
 describe("GhosttyTerminalSurface visibility", () => {
   const surfaces = new Set<GhosttyTerminalSurface>();
 
-  // Keep the real surface, renderer, and WASM core. Only browser layout and
-  // scheduling are replaced so tests can count work while the terminal is hidden.
+  function key(
+    surface: GhosttyTerminalSurface,
+    key: string,
+    code: string,
+    modifiers: Partial<
+      Pick<
+        KeyboardEvent,
+        | "altKey"
+        | "ctrlKey"
+        | "metaKey"
+        | "shiftKey"
+        | "isComposing"
+        | "keyCode"
+        | "getModifierState"
+      >
+    > = {},
+    type = "keydown",
+  ) {
+    const event = Object.assign(new Event(type, { cancelable: true }), {
+      key,
+      code,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 0,
+      getModifierState: () => false,
+      ...modifiers,
+    });
+    surface.input.dispatchEvent(event);
+    return event;
+  }
+
   function createHarness() {
     vi.useFakeTimers();
     const frames = new Map<number, FrameRequestCallback>();
-    const resizeCallbacks = new Set<() => void>();
+    const resizeTargets = new Map<(entries: { target: Element }[]) => void, Set<Element>>();
     const paint = vi.fn((_operation: string, _args: ReadonlyArray<unknown>) => {});
     let frameId = 0;
     const requestFrame = vi.fn((callback: FrameRequestCallback) => {
@@ -123,6 +155,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       "window",
       Object.assign(new EventTarget(), {
         devicePixelRatio: 1,
+        innerHeight: 104,
         requestAnimationFrame: requestFrame,
         cancelAnimationFrame: (id: number) => frames.delete(id),
         setTimeout,
@@ -135,12 +168,17 @@ describe("GhosttyTerminalSurface visibility", () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        constructor(private readonly callback: () => void) {
-          resizeCallbacks.add(callback);
+        constructor(private readonly callback: (entries: { target: Element }[]) => void) {
+          resizeTargets.set(callback, new Set());
         }
-        observe() {}
+        observe(target: Element) {
+          resizeTargets.get(this.callback)?.add(target);
+        }
+        unobserve(target: Element) {
+          resizeTargets.get(this.callback)?.delete(target);
+        }
         disconnect() {
-          resizeCallbacks.delete(this.callback);
+          resizeTargets.delete(this.callback);
         }
       },
     );
@@ -165,7 +203,9 @@ describe("GhosttyTerminalSurface visibility", () => {
         for (const callback of queued) callback(0);
       },
       resize() {
-        for (const callback of resizeCallbacks) callback();
+        for (const [callback, targets] of resizeTargets) {
+          callback([...targets].map((target) => ({ target })));
+        }
       },
       pointer(
         type: string,
@@ -173,15 +213,30 @@ describe("GhosttyTerminalSurface visibility", () => {
         buttons: number,
         modifiers: boolean | Partial<Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">> = {},
         button = 0,
+        clientY = 5,
       ) {
         canvas.dispatchEvent(
           Object.assign(new Event(type, { cancelable: true }), {
             clientX,
-            clientY: 5,
+            clientY,
             pointerId: 1,
             button,
             buttons,
             ...(typeof modifiers === "boolean" ? { shiftKey: modifiers } : modifiers),
+          }),
+        );
+      },
+      touch(type: string, clientY: number, pointerId = 2) {
+        canvas.dispatchEvent(
+          Object.assign(new Event(type, { cancelable: true }), {
+            clientX: 40,
+            clientY,
+            pointerId,
+            pointerType: "touch",
+            isPrimary: pointerId === 2,
+            button: 0,
+            buttons: type === "pointerup" ? 0 : 1,
+            shiftKey: false,
           }),
         );
       },
@@ -214,6 +269,182 @@ describe("GhosttyTerminalSurface visibility", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it.each([
+    { platform: "Linux x86_64", primary: { ctrlKey: true } },
+    { platform: "MacIntel", primary: { metaKey: true } },
+  ])(
+    "navigates history from terminal input without sending keys ($platform)",
+    async ({ platform, primary }) => {
+      vi.stubGlobal("navigator", { platform });
+      const harness = createHarness();
+      const surface = await harness.create({ beforeKey: () => true });
+      surface.write(Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\r\n"));
+      harness.flushFrame();
+      const latest = harness.renderedSnapshot.rowData[0]?.text;
+      expect(surface.isAtBottom()).toBe(true);
+
+      expect(key(surface, "PageUp", "PageUp", { shiftKey: true }).defaultPrevented).toBe(true);
+      harness.flushFrame();
+      expect(harness.renderedSnapshot.rowData[0]?.text).toContain("line 8");
+      expect(surface.isAtBottom()).toBe(false);
+      key(surface, "PageDown", "PageDown", { shiftKey: true });
+      harness.flushFrame();
+      expect(harness.renderedSnapshot.rowData[0]?.text).toBe(latest);
+
+      key(surface, "Home", "Home", { ...primary, shiftKey: true });
+      harness.flushFrame();
+      expect(harness.renderedSnapshot.rowData[0]?.text).toContain("line 0");
+      key(surface, "End", "End", { ...primary, shiftKey: true });
+      harness.flushFrame();
+      expect(harness.renderedSnapshot.rowData[0]?.text).toBe(latest);
+      expect(surface.isAtBottom()).toBe(true);
+      expect(harness.onData).not.toHaveBeenCalled();
+    },
+  );
+
+  it("forwards navigation presses and releases when scrollback state is unavailable", async () => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const harness = createHarness();
+    const surface = await harness.create({ beforeKey: () => true });
+    surface.write("history\x1b[>31u");
+    vi.spyOn(GhosttyTerminalCore.prototype, "scrollbarState").mockReturnValue(null);
+
+    for (const [name, modifiers] of [
+      ["PageUp", { shiftKey: true }],
+      ["Home", { ctrlKey: true, shiftKey: true }],
+    ] as const) {
+      key(surface, name, name, modifiers);
+      key(surface, name, name, modifiers, "keyup");
+    }
+    expect(harness.onData).toHaveBeenCalledTimes(4);
+    expect(harness.onData.mock.calls[1]?.[0]).toContain(":3");
+    expect(harness.onData.mock.calls[3]?.[0]).toContain(":3");
+  });
+
+  it("selects full history and keeps selection coordinates available outside the viewport", async () => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const harness = createHarness();
+    const surface = await harness.create({ beforeKey: () => true });
+    const lines = Array.from({ length: 20 }, (_, index) => `line ${index}`);
+    surface.write(lines.join("\r\n"));
+    harness.flushFrame();
+    surface.selectAll();
+    harness.flushFrame();
+    expect(surface.getSelection()).toBe(lines.join("\n"));
+    expect(surface.getSelectionPosition()).toMatchObject({ start: { x: 0, y: 0 } });
+    expect(surface.getSelectionPosition()?.end.y).toBe(19);
+    expect(surface.getSelectionEndClientRect()).not.toBeNull();
+    expect(harness.renderedSnapshot.rowData.every((row) => row.cells[0]?.selected)).toBe(true);
+
+    key(surface, "Home", "Home", { ctrlKey: true, shiftKey: true });
+    harness.flushFrame();
+    surface.selectAll();
+    expect(surface.getSelection()).toBe(lines.join("\n"));
+    expect(surface.getSelectionPosition()?.end.y).toBe(19);
+    expect(surface.getSelectionEndClientRect()).toBeNull();
+    surface.clearSelection();
+    expect(surface.getSelection()).toBe("");
+    expect(surface.getSelectionPosition()).toBeNull();
+  });
+
+  it.each([
+    { platform: "Linux x86_64", modifiers: { ctrlKey: true, shiftKey: true } },
+    { platform: "MacIntel", modifiers: { metaKey: true } },
+  ])("selects all through the local shortcut ($platform)", async ({ platform, modifiers }) => {
+    vi.stubGlobal("navigator", { platform });
+    const harness = createHarness();
+    const surface = await harness.create({ beforeKey: () => true });
+    surface.write("hello\r\nworld");
+    harness.flushFrame();
+    expect(key(surface, "a", "KeyA", modifiers).defaultPrevented).toBe(true);
+    expect(surface.getSelection()).toBe("hello\nworld");
+    expect(surface.getSelectionPosition()).not.toBeNull();
+    expect(harness.onData).not.toHaveBeenCalled();
+  });
+
+  it("preserves shell Ctrl+A and ordinary application navigation", async () => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const harness = createHarness();
+    const surface = await harness.create({ beforeKey: () => true });
+    key(surface, "a", "KeyA", { ctrlKey: true });
+    key(surface, "PageUp", "PageUp");
+    key(surface, "PageDown", "PageDown");
+    key(surface, "Home", "Home");
+    key(surface, "End", "End");
+    expect(harness.onData.mock.calls.map(([data]) => data)).toEqual([
+      "\x01",
+      "\x1b[5~",
+      "\x1b[6~",
+      "\x1b[H",
+      "\x1b[F",
+    ]);
+    expect(surface.hasSelection()).toBe(false);
+  });
+
+  it("leaves modified history keys with alternate-screen applications", async () => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const harness = createHarness();
+    const surface = await harness.create({ beforeKey: () => true });
+    surface.write("\x1b[?1049happ");
+    key(surface, "PageUp", "PageUp", { shiftKey: true });
+    key(surface, "End", "End", { ctrlKey: true, shiftKey: true });
+    expect(harness.onData.mock.calls.map(([data]) => data)).toEqual(["\x1b[5;2~", "\x1b[1;6F"]);
+    surface.selectAll();
+    expect(surface.getSelection()).toBe("app");
+    surface.write("\x1b[?1049l");
+    expect(surface.getSelection()).toBe("");
+  });
+
+  it("suppresses local shortcut releases in Kitty sessions, including read-only observers", async () => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const harness = createHarness();
+    const surface = await harness.create({ beforeKey: () => true });
+    surface.input.readOnly = true;
+    surface.write("history\x1b[>31u");
+    for (const [name, code, modifiers] of [
+      ["PageUp", "PageUp", { shiftKey: true }],
+      ["Home", "Home", { ctrlKey: true, shiftKey: true }],
+      ["a", "KeyA", { ctrlKey: true, shiftKey: true }],
+    ] as const) {
+      key(surface, name, code, modifiers);
+      key(surface, name, code, modifiers, "keyup");
+    }
+    expect(surface.getSelection()).toBe("history");
+    expect(harness.onData).not.toHaveBeenCalled();
+
+    key(surface, "PageUp", "PageUp");
+    key(surface, "PageUp", "PageUp", {}, "keyup");
+    expect(harness.onData).toHaveBeenCalledTimes(2);
+    expect(harness.onData.mock.calls[1]?.[0]).toContain(":3");
+  });
+
+  it("honors host interception, IME candidates, and AltGr before local shortcuts", async () => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const harness = createHarness();
+    let allow = false;
+    const surface = await harness.create({ beforeKey: () => allow });
+    surface.write("hello\x1b[>31u");
+    key(surface, "a", "KeyA", { ctrlKey: true, shiftKey: true });
+    key(surface, "a", "KeyA", {}, "keyup");
+    expect(surface.hasSelection()).toBe(false);
+    allow = true;
+    surface.input.value = "候補";
+    key(surface, "a", "KeyA", { ctrlKey: true, shiftKey: true, isComposing: true });
+    key(surface, "a", "KeyA", {}, "keyup");
+    key(surface, "a", "KeyA", { ctrlKey: true, shiftKey: true, keyCode: 229 });
+    key(surface, "a", "KeyA", {}, "keyup");
+    key(surface, "a", "KeyA", {
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true,
+      getModifierState: (modifier) => modifier === "AltGraph",
+    });
+    key(surface, "a", "KeyA", {}, "keyup");
+    expect(surface.input.value).toBe("候補");
+    expect(surface.hasSelection()).toBe(false);
+    expect(harness.onData).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -306,6 +537,28 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(resizePty).toHaveBeenCalledOnce();
   });
 
+  it("sends the settled grid when a resize drag is released", async () => {
+    const harness = createHarness();
+    const onResize = vi.fn<(cols: number, rows: number) => void>();
+    const surface = await harness.create({ onResize });
+    vi.advanceTimersByTime(150);
+    onResize.mockClear();
+
+    harness.mount.clientWidth = 120;
+    harness.resize();
+    expect(surface.cols).toBe(14);
+    expect(onResize).not.toHaveBeenCalled();
+
+    harness.mount.clientWidth = 96;
+    window.dispatchEvent(new Event("pointerup"));
+    expect(onResize).toHaveBeenCalledExactlyOnceWith(11, 6);
+
+    harness.resize();
+    vi.advanceTimersByTime(150);
+    window.dispatchEvent(new Event("pointerup"));
+    expect(onResize).toHaveBeenCalledOnce();
+  });
+
   it("replays the current grid on reveal when a hidden host becomes ready", async () => {
     const harness = createHarness();
     const onResize = vi.fn<(cols: number, rows: number) => void>();
@@ -360,6 +613,91 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(harness.frames.size).toBe(0);
   });
 
+  it("scrolls touch drags in both directions without selecting or sending input", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write(Array.from({ length: 50 }, (_, i) => `row ${i}\r\n`).join(""));
+    harness.flushFrame();
+    const bottom = harness.renderedSnapshot.rowData[0]?.text;
+    harness.touch("pointerdown", 20);
+    for (let y = 22; y <= 68; y += 2) harness.touch("pointermove", y);
+    harness.flushFrame();
+    expect(harness.renderedSnapshot.rowData[0]?.text).not.toBe(bottom);
+    expect(surface.getSelection()).toBe("");
+    harness.touch("pointermove", 20);
+    harness.touch("pointerup", 20);
+    harness.flushFrame();
+    expect(harness.renderedSnapshot.rowData[0]?.text).toBe(bottom);
+    expect(harness.onData).not.toHaveBeenCalled();
+  });
+
+  it("sends touch scrolling to alternate-screen applications", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("\x1b[?1049h\x1b[?1h");
+    harness.touch("pointerdown", 20);
+    harness.touch("pointermove", 52);
+    harness.touch("pointerup", 52);
+    expect(harness.onData.mock.calls).toEqual([["\x1bOA\x1bOA"]]);
+  });
+
+  it("reports touch scrolling and taps to mouse-tracking applications", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("\x1b[?1000h\x1b[?1006h");
+    harness.touch("pointerdown", 20);
+    harness.touch("pointermove", 52);
+    harness.touch("pointerup", 52);
+    expect(harness.onData.mock.calls.map(([data]) => data)).toEqual([
+      "\x1b[<64;5;4M",
+      "\x1b[<64;5;4M",
+    ]);
+    harness.onData.mockClear();
+    harness.touch("pointerdown", 20);
+    harness.touch("pointerup", 20);
+    expect(harness.onData.mock.calls.map(([data]) => data)).toEqual([
+      "\x1b[<0;5;2M",
+      "\x1b[<0;5;2m",
+    ]);
+  });
+
+  it("opens a link on touch tap but not on drag or cancellation", async () => {
+    const harness = createHarness();
+    const onLinkActivate = vi.fn();
+    const surface = await harness.create({ onLinkActivate });
+    surface.write("https://example.com");
+    harness.flushFrame();
+    harness.touch("pointerdown", 5);
+    harness.touch("pointerup", 5);
+    expect(onLinkActivate).toHaveBeenCalledTimes(1);
+    harness.touch("pointerdown", 5);
+    harness.touch("pointermove", 37);
+    harness.touch("pointerup", 37);
+    harness.touch("pointerdown", 5);
+    harness.touch("pointercancel", 5);
+    expect(onLinkActivate).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends a canceled touch drag and ignores a second finger", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write(Array.from({ length: 50 }, (_, i) => `row ${i}\r\n`).join(""));
+    harness.flushFrame();
+    const bottom = harness.renderedSnapshot.rowData[0]?.text;
+    harness.touch("pointerdown", 20);
+    harness.touch("pointerdown", 20, 3);
+    harness.touch("pointermove", 68, 3);
+    harness.touch("pointercancel", 20);
+    harness.touch("pointermove", 68);
+    harness.flushFrame();
+    expect(harness.renderedSnapshot.rowData[0]?.text).toBe(bottom);
+    harness.touch("pointerdown", 20);
+    harness.touch("pointermove", 68);
+    harness.touch("pointerup", 68);
+    harness.flushFrame();
+    expect(harness.renderedSnapshot.rowData[0]?.text).not.toBe(bottom);
+  });
+
   it("keeps the selection on reveal and applies a hidden selection clear", async () => {
     const harness = createHarness();
     const surface = await harness.create();
@@ -393,6 +731,29 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(harness.renderedSnapshot.rowData[0]?.cells.some((cell) => cell.selected)).toBe(false);
   });
 
+  it("scrolls a selection drag held at the terminal edge, even when the window ends there", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write(Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\r\n"));
+    harness.flushFrame();
+    const latest = harness.renderedSnapshot.rowData[0]?.text;
+
+    harness.pointer("pointerdown", 5, 1, {}, 0, 50);
+    harness.pointer("pointermove", 5, 1, {}, 0, 1);
+    vi.advanceTimersByTime(400);
+    harness.flushFrame();
+    expect(surface.isAtBottom()).toBe(false);
+
+    harness.pointer("pointermove", 5, 1, {}, 0, 103);
+    vi.advanceTimersByTime(2_000);
+    harness.pointer("pointerup", 5, 0, {}, 0, 103);
+    harness.flushFrame();
+    expect(surface.isAtBottom()).toBe(true);
+    expect(harness.renderedSnapshot.rowData[0]?.text).toBe(latest);
+    expect(surface.getSelection()).not.toBe("");
+    expect(surface.getSelectionPosition()?.end.y).toBe(39);
+  });
+
   it("pastes the terminal selection, and only that, on a Linux middle click", async () => {
     const harness = createHarness();
     const readText = vi.fn(async () => "clipboard text");
@@ -411,8 +772,6 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(harness.onData.mock.calls.at(-1)?.[0]).toBe("hello");
     expect(surface.getSelection()).toBe("hello");
 
-    // Without a selection there is no primary buffer to paste; the clipboard
-    // holds what the user copied and must not be substituted.
     surface.clearSelection();
     harness.pointer("pointerdown", 5, 4, false, 1);
     expect(readText).not.toHaveBeenCalled();
@@ -637,9 +996,6 @@ describe("shouldBlinkTerminalCursor", () => {
   });
 
   it("holds the cursor steady when blinking would be unwanted", () => {
-    // Unfocused surfaces draw a steady hollow cursor, DECSCUSR steady styles and
-    // DEC mode 12 turn blinking off, a hidden cursor has nothing to toggle, and
-    // reduced-motion readers get no permanently animating element.
     expect(shouldBlinkTerminalCursor({ ...blinking, focused: false })).toBe(false);
     expect(shouldBlinkTerminalCursor({ ...blinking, cursorBlinking: false })).toBe(false);
     expect(shouldBlinkTerminalCursor({ ...blinking, cursorVisible: false })).toBe(false);
@@ -709,17 +1065,12 @@ describe("terminalLinkAtPositionWithRange", () => {
       isWrapContinuation,
       wrapsToNext,
     });
-    // The head of the wrapped line scrolled above the viewport.
     const headCut = [row("ple.com/missing", true), row("head", true)];
     expect(terminalLinkAtPositionWithRange(headCut, 0, 4)).toBeNull();
-    // The bottom row soft-wraps on below the viewport.
     const tailCut = [row("https://t3.codes", false, true)];
     expect(terminalLinkAtPositionWithRange(tailCut, 0, 8)).toBeNull();
-    // A partial bottom row is provably complete and still resolves.
     const complete = [row("https://t3.codes", false), row("", false)];
     expect(terminalLinkAtPositionWithRange(complete, 0, 8)?.text).toBe("https://t3.codes");
-    // A wide grapheme earlier in the row must not break truncation detection:
-    // the soft-wrap flag decides, not string-length-versus-cell-count.
     const wideFull: GhosttyRow = {
       cells: [
         { ...cell("🙂"), wide: 1 },
@@ -731,7 +1082,6 @@ describe("terminalLinkAtPositionWithRange", () => {
       wrapsToNext: true,
     };
     expect(terminalLinkAtPositionWithRange([wideFull], 0, 8)).toBeNull();
-    // Unwritten trailing cells prove the bottom row is complete.
     const unwrittenTail: GhosttyRow = {
       cells: [
         ...Array.from("https://t3.codes", (character) => cell(character)),
@@ -800,8 +1150,7 @@ describe("applyTerminalCopyEvent", () => {
 
   it("leaves the writeText fallback alive when clipboardData is missing", () => {
     // Electron's edit-menu Copy often delivers a copy event with no
-    // clipboardData. Claiming that event used to skip writeText and copy the
-    // empty IME textarea, which is the blank clipboard users paste.
+    // clipboardData.
     expect(applyTerminalCopyEvent("ls -la", null)).toEqual({
       preventDefault: false,
       claimWriteFallback: false,
@@ -1022,8 +1371,7 @@ describe("terminal font resolution", () => {
 
   it("ignores proportional families the cell grid cannot lay out", () => {
     // jsdom has no canvas metrics, so the probe answers "monospace" and the
-    // family is kept; the guard is exercised in the browser instead. Assert the
-    // shape stays intact so a rejected face still yields a usable stack.
+    // family is kept; the guard is exercised in the browser instead.
     const stack = terminalFontFamily("Helvetica Neue");
     expect(stack.endsWith("monospace")).toBe(true);
   });
@@ -1052,17 +1400,12 @@ describe("terminalContentOriginY", () => {
   });
 
   it("pins the grid to the bottom by moving the sub-row slack above row 0", () => {
-    // 100px mount, 4px padding, 5 rows of 16px: 92 - 80 = 12px slack on top.
     expect(terminalContentOriginY(100, 4, 5, 16, true)).toBe(16);
-    // Exact fit keeps the origin at the padding.
     expect(terminalContentOriginY(88, 4, 5, 16, true)).toBe(4);
-    // A mount smaller than the grid never pushes the origin above the padding.
     expect(terminalContentOriginY(80, 4, 5, 16, true)).toBe(4);
   });
 
   it("keeps the prompt stationary while a drag crosses row boundaries", () => {
-    // Growing the mount pixel by pixel: the bottom edge (origin + rows*cell)
-    // tracks the mount bottom exactly until a new row fits.
     for (let height = 88; height < 104; height += 1) {
       const rows = Math.max(1, Math.floor((height - 8) / 16));
       const origin = terminalContentOriginY(height, 4, rows, 16, true);

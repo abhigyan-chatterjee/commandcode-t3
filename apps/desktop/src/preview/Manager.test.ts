@@ -5,7 +5,7 @@ import type {
   DesktopPreviewRecordingFrame,
   DesktopPreviewRecordingInputEvent,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -29,6 +29,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewManager from "./Manager.ts";
+import * as PreviewPasskeys from "./Passkeys.ts";
 
 describe("fitPictureInPictureContentSize", () => {
   it("preserves the PiP content area across aspect-ratio changes", () => {
@@ -158,13 +159,24 @@ describe("previewWindowOpenAction", () => {
     ).toBe("popup");
   });
 
-  it("keeps target=_blank links in the preview tab", () => {
+  it("opens target=_blank links as a new tab", () => {
     expect(PreviewManager.previewWindowOpenAction(details({ disposition: "foreground-tab" }))).toBe(
-      "navigate",
+      "new-tab",
     );
     expect(PreviewManager.previewWindowOpenAction(details({ disposition: "background-tab" }))).toBe(
-      "navigate",
+      "new-tab",
     );
+  });
+
+  it("keeps a form POST with a body on the in-place path", () => {
+    // A new tab can only reopen the URL as a GET, which would drop the body.
+    const postBody = { data: [], contentType: "application/x-www-form-urlencoded" };
+    expect(
+      PreviewManager.previewWindowOpenAction({
+        ...details({ disposition: "foreground-tab" }),
+        postBody,
+      }),
+    ).toBe("navigate");
   });
 
   it("does not hand a window to schemes that cannot be hardened", () => {
@@ -172,13 +184,22 @@ describe("previewWindowOpenAction", () => {
     // when its preferences can be overridden. Chromium copies the guest's
     // preferences for `about:blank` and forbids overriding them.
     for (const url of [
-      "about:blank",
       "javascript:alert(1)",
       "file:///etc/passwd",
       "vscode://vscode-remote/ssh-remote+box/tmp",
       "not a url",
     ]) {
       expect(PreviewManager.previewWindowOpenAction(details({ url }))).toBe("navigate");
+    }
+  });
+
+  it("denies a blank window instead of blanking the opener", () => {
+    // MSAL opens `about:blank` first and falls back to a redirect on `null`;
+    // loading the blank page into the tab would destroy that fallback.
+    for (const url of ["about:blank", ""]) {
+      for (const disposition of ["new-window", "foreground-tab"] as const) {
+        expect(PreviewManager.previewWindowOpenAction(details({ url, disposition }))).toBe("deny");
+      }
     }
   });
 });
@@ -281,11 +302,18 @@ const managerLayer = (platform: NodeJS.Platform = "darwin") =>
     ),
     Layer.provideMerge(DesktopBrowserHost.layer),
     Layer.provideMerge(layerBrowserSession),
+    Layer.provideMerge(
+      Layer.mock(PreviewPasskeys.PreviewPasskeys)({
+        bridgeEnabled: false,
+        installSessionHandlers: () => {},
+        attachGuest: () => () => {},
+      }),
+    ),
     Layer.provideMerge(layerEnvironment),
     Layer.provideMerge(layerFileSystem),
     Layer.provideMerge(Path.layer),
     Layer.provideMerge(NodeCrypto.layer),
-    Layer.provideMerge(Layer.succeed(HostProcessPlatform, platform)),
+    Layer.provideMerge(Layer.succeed(HostProcess.Platform, platform)),
   );
 
 const withManager = <A>(
@@ -301,6 +329,8 @@ const withManager = <A>(
 
 interface TestCapturedPreviewImage {
   readonly toJPEG: () => Buffer;
+  /** Only fixtures that deliver picture-in-picture frames need pixels to fingerprint. */
+  readonly toBitmap?: () => Buffer;
   readonly getSize: () => { readonly width: number; readonly height: number };
 }
 
@@ -355,7 +385,7 @@ const makeTestPreviewWebContents = (
     getType: () => "webview",
     getURL: () => "https://example.com",
     getTitle: () => "Example",
-    isLoading: () => false,
+    isLoadingMainFrame: () => false,
     getZoomFactor: () => 1,
     setZoomFactor: vi.fn(),
     setAudioMuted: vi.fn(),
@@ -379,7 +409,6 @@ const makeTestPreviewWebContents = (
   } as unknown as TestPreviewWebContents;
 };
 
-/** Two ready tabs (41, 42) sharing one window, so they contend for the single display-media slot. */
 const setupRecordingRaceTabs = (manager: PreviewManager.PreviewManager["Service"]) =>
   Effect.gen(function* () {
     const capturePage = vi.fn(async () => ({
@@ -460,7 +489,7 @@ const makeFaviconWebContents = (options?: {
     getType: () => "webview",
     getURL: () => currentUrl,
     getTitle: () => "Preview",
-    isLoading: () => loading,
+    isLoadingMainFrame: () => loading,
     isDevToolsOpened: () => false,
     getZoomFactor: () => 1,
     setZoomFactor: vi.fn(),
@@ -571,6 +600,40 @@ describe("PreviewManager", () => {
     createFromPath.mockClear();
     webviewSend.mockClear();
   });
+
+  effectIt.effect("opens a target=_blank link as a new tab without navigating the opener", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents();
+        fromId.mockReturnValue(preview.webContents);
+        const opened: Array<{ tabId: string; url: string; background: boolean }> = [];
+        yield* manager.subscribeOpenLinks((event) => Effect.sync(() => void opened.push(event)));
+        yield* manager.createTab("tab_links");
+        yield* manager.registerWebview("tab_links", 42);
+        const openHandler = (preview.webContents as Electron.WebContents).setWindowOpenHandler as
+          | ReturnType<typeof vi.fn>
+          | undefined;
+        const handler = openHandler?.mock.lastCall?.[0] as (
+          details: Partial<Electron.HandlerDetails>,
+        ) => { action: string };
+
+        expect(
+          handler({ url: "https://github.com/issues/1", disposition: "foreground-tab" }),
+        ).toEqual({ action: "deny" });
+        expect(handler({ url: "about:blank", disposition: "new-window" })).toEqual({
+          action: "deny",
+        });
+        handler({ url: "https://github.com/issues/2", disposition: "background-tab" });
+        yield* settle(() => opened.length === 2);
+
+        expect(preview.loadURL).not.toHaveBeenCalled();
+        expect(opened).toEqual([
+          { tabId: "tab_links", url: "https://github.com/issues/1", background: false },
+          { tabId: "tab_links", url: "https://github.com/issues/2", background: true },
+        ]);
+      }),
+    ),
+  );
 
   effectIt.effect("keeps preview shortcuts out of the host window", () =>
     withManager((manager) =>
@@ -762,7 +825,6 @@ describe("PreviewManager", () => {
           };
           beforeInput({ preventDefault } as never, input as never);
           expect(contents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false);
-          // Releasing Command must not disable native fallback for the pending paste.
           beforeInput(
             { preventDefault } as never,
             { ...input, type: "keyUp", key: "Meta", meta: false } as never,
@@ -772,7 +834,6 @@ describe("PreviewManager", () => {
           beforeInput({ preventDefault } as never, { ...input, key: "w" } as never);
           expect(contents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(true);
 
-          // An injected paste in an unfocused guest cannot edit the active renderer.
           getFocusedWebContents.mockReturnValue(null);
           beforeInput({ preventDefault } as never, input as never);
           expect(contents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(true);
@@ -885,7 +946,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "about:blank",
           getTitle: () => "",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -978,7 +1039,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "http://localhost:3200/",
           getTitle: () => "Preview",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           isDevToolsOpened: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
@@ -1481,7 +1542,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => url,
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => {
             if (!zoomReadable) throw new Error("zoom unavailable");
             return effectiveZoom;
@@ -1519,8 +1580,6 @@ describe("PreviewManager", () => {
         expect(states.at(-1)?.zoomFactor).toBe(1);
         expect(setZoomFactor).toHaveBeenCalledWith(1);
 
-        // An app zoom leaves the guest reporting the inherited level. Navigating
-        // must not adopt it as the preview's zoom.
         effectiveZoom = 0.8;
         url = "https://example.com/after-app-zoom";
         listeners.get("did-navigate")?.();
@@ -1533,7 +1592,6 @@ describe("PreviewManager", () => {
         });
         expect(states.at(-1)?.zoomFactor).toBe(1);
 
-        // Only the preview's own zoom controls move it.
         yield* manager.zoomIn("tab_zoom");
         expect(setZoomFactor).toHaveBeenCalledWith(1.1);
         expect(states.at(-1)?.zoomFactor).toBe(1.1);
@@ -1551,7 +1609,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => url,
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: replacementSetZoomFactor,
           setAudioMuted: vi.fn(),
@@ -1592,7 +1650,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor,
           setAudioMuted: vi.fn(),
@@ -1626,9 +1684,6 @@ describe("PreviewManager", () => {
     ),
   );
 
-  // did-attach and dom-ready both re-register the guest that is already
-  // attached, and a guest that just inherited the app window's zoom needs its
-  // own back — without that round trip republishing tab state.
   effectIt.effect("re-asserts the tab's zoom when the active guest registers again", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -1639,7 +1694,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor,
           setAudioMuted: vi.fn(),
@@ -1695,7 +1750,7 @@ describe("PreviewManager", () => {
               getType: () => "webview",
               getURL: () => "https://example.com",
               getTitle: () => "Example",
-              isLoading: () => false,
+              isLoadingMainFrame: () => false,
               getZoomFactor: () => 1,
               setZoomFactor: vi.fn(),
               setAudioMuted: vi.fn(),
@@ -1790,7 +1845,7 @@ describe("PreviewManager", () => {
       getType: () => "webview",
       getURL: () => "http://localhost:5173/README.md",
       getTitle: () => "README.md",
-      isLoading: () => true,
+      isLoadingMainFrame: () => true,
       getZoomFactor: () => 1,
       setZoomFactor: vi.fn(),
       setAudioMuted: vi.fn(),
@@ -1829,8 +1884,6 @@ describe("PreviewManager", () => {
   effectIt.effect("sets the opaque base as soon as a guest attaches", () =>
     withManager((manager) =>
       Effect.gen(function* () {
-        // The tab's first document can paint before the renderer registers the
-        // guest, so the opaque base has to be the first command on attach.
         const claimed = makeAttachingGuest(44);
         fromId.mockReturnValue(claimed.wc);
         yield* manager.prepareWebview(claimed.wc);
@@ -1848,7 +1901,6 @@ describe("PreviewManager", () => {
           features: [{ name: "prefers-color-scheme", value: "dark" }],
         });
 
-        // A guest destroyed before any tab claims it releases its session.
         const unclaimed = makeAttachingGuest(45);
         yield* manager.prepareWebview(unclaimed.wc);
         expect(unclaimed.attach).toHaveBeenCalledTimes(1);
@@ -1915,7 +1967,7 @@ describe("PreviewManager", () => {
         getType: () => "webview",
         getURL: () => "https://example.com",
         getTitle: () => "Example",
-        isLoading: () => false,
+        isLoadingMainFrame: () => false,
         getZoomFactor: () => 1,
         setZoomFactor: vi.fn(),
         setAudioMuted,
@@ -2007,7 +2059,6 @@ describe("PreviewManager", () => {
         });
         const exit = yield* manager.setAudioMuted("tab_audio_fail", true).pipe(Effect.exit);
 
-        // Reporting success would draw the tab as muted while it keeps playing.
         expect(Exit.isFailure(exit)).toBe(true);
         expect(states.at(-1)?.audioMuted).toBe(false);
       }),
@@ -2025,15 +2076,12 @@ describe("PreviewManager", () => {
         yield* manager.setAudioMuted("tab_audio_attach_fail", true);
 
         const replacement = makeAudioWebContents(43);
-        // Fails the post-attach settle, not the pre-publish apply.
         replacement.setAudioMuted.mockImplementationOnce(() => undefined);
         replacement.setAudioMuted.mockImplementationOnce(() => {
           throw new Error("guest went away");
         });
         fromId.mockReturnValue(replacement.wc);
 
-        // Reconciliation is best-effort: a guest dying mid-attach must not fail
-        // the registration it was attaching for.
         const exit = yield* manager.registerWebview("tab_audio_attach_fail", 43).pipe(Effect.exit);
         expect(Exit.isSuccess(exit)).toBe(true);
       }),
@@ -2156,13 +2204,9 @@ describe("PreviewManager", () => {
         yield* manager.navigate("tab_audio_nav", "https://example.com/next");
         yield* Effect.yieldNow;
 
-        // navigate runs before loadURL swaps the document, so the old page can
-        // still be playing. Dropping audibility here would lose the speaker
-        // with no transition left to bring it back.
         expect(states.at(-1)?.audioMuted).toBe(true);
         expect(states.at(-1)?.audible).toBe(true);
 
-        // Chromium reports the real stop once the new document takes over.
         guest.emitAudioState(false);
         yield* Effect.yieldNow;
         expect(states.at(-1)?.audible).toBe(false);
@@ -2258,7 +2302,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => url,
           getTitle: () => "localhost:5733",
-          isLoading: () => loading,
+          isLoadingMainFrame: () => loading,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -2339,6 +2383,27 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("ignores a late cross-origin iframe load once the page has loaded", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents();
+        Object.assign(preview.webContents, { isLoading: () => true });
+        fromId.mockReturnValue(preview.webContents);
+        const states: PreviewManager.PreviewTabState[] = [];
+        yield* manager.subscribeStateChanges((_tabId, state) =>
+          Effect.sync(() => void states.push(state)),
+        );
+        yield* manager.createTab("tab_iframe");
+        yield* manager.registerWebview("tab_iframe", 42);
+
+        preview.listeners.get("did-start-loading")?.();
+        preview.listeners.get("did-stop-loading")?.();
+        yield* settle(() => states.length > 2);
+        expect(states.at(-1)?.navStatus.kind).toBe("Success");
+      }),
+    ),
+  );
+
   effectIt.effect("captures a PNG screenshot into browser artifacts", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -2351,7 +2416,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com:8443/path?query=value",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -2413,7 +2478,6 @@ describe("PreviewManager", () => {
         expect(Exit.isSuccess(retriedExit)).toBe(true);
         expect(capturePage).toHaveBeenCalledTimes(3);
 
-        // A persistent failure still surfaces once the retries are spent.
         capturePage.mockClear();
         const captureCause = new Error("capture failed");
         capturePage.mockRejectedValue(captureCause);
@@ -2501,7 +2565,6 @@ describe("PreviewManager", () => {
         } as never);
 
         yield* manager.startRecording("tab_capture_throttling_1");
-        // The first renderer takes its grant, freeing the arm slot for the second tab.
         host.displayMediaHandler()?.({ frame: host.mainFrame }, () => {});
         yield* manager.startRecording("tab_capture_throttling_2");
         expect(setBackgroundThrottling.mock.calls).toEqual([[false]]);
@@ -2817,7 +2880,6 @@ describe("PreviewManager", () => {
       const manager = yield* PreviewManager.PreviewManager;
       yield* manager.createTab("tab_1", { serverTab });
       yield* manager.registerWebview("tab_1", 42);
-      // The debugger attaches in the background; the server hears it here.
       expect(yield* nextType).toBe("attached");
       yield* manager.closeTab("tab_1");
       expect(yield* nextType).toBe("detached");
@@ -2840,7 +2902,6 @@ describe("PreviewManager", () => {
         const fiber = yield* Effect.exit(manager.captureScreenshot("tab_1")).pipe(
           Effect.forkChild({ startImmediately: true }),
         );
-        // Let the rejection schedule its retry before replacing the guest.
         yield* TestClock.adjust(60);
         expect(capturePage).toHaveBeenCalledTimes(1);
         fromId.mockReturnValue(makeTestPreviewWebContents(capturePage, 43));
@@ -2901,7 +2962,6 @@ describe("PreviewManager", () => {
         }));
         const firstSendCommand = vi.fn(async () => undefined);
         const secondSendCommand = vi.fn(async () => undefined);
-        // Both webviews live in the same window, so they share one display-media handler.
         const host = makeTestHostWebContents();
         const makeWebContents = (
           id: number,
@@ -2919,7 +2979,7 @@ describe("PreviewManager", () => {
             getType: () => "webview",
             getURL: () => `https://example.com/${id}`,
             getTitle: () => `Example ${id}`,
-            isLoading: () => false,
+            isLoadingMainFrame: () => false,
             getZoomFactor: () => 1,
             setZoomFactor: vi.fn(),
             setAudioMuted: vi.fn(),
@@ -3005,8 +3065,6 @@ describe("PreviewManager", () => {
     ),
   );
 
-  // Runs on the real clock: an earlier queueing design only settled under TestClock and stalled the
-  // losing start forever in the desktop app.
   effectIt.live("settles both starts when two tabs race for the capture stream", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -3021,7 +3079,6 @@ describe("PreviewManager", () => {
         );
 
         const [exitA, exitB] = exits;
-        // Exactly one start owns the stream; the other fails fast instead of hanging.
         expect(exits.filter(Exit.isSuccess)).toHaveLength(1);
         const loserExit = Exit.isSuccess(exitA) ? exitB : exitA;
         if (Exit.isSuccess(loserExit)) return;
@@ -3029,7 +3086,6 @@ describe("PreviewManager", () => {
           _tag: "PreviewRecordingArmConflictError",
         });
 
-        // The single grant goes to the tab that actually won the slot, never the other one.
         takeGrant();
         expect(grants).toEqual([{ video: { routingId: Exit.isSuccess(exitA) ? 41 : 42 } }]);
         expect(host.session.setDisplayMediaRequestHandler).toHaveBeenCalledOnce();
@@ -3051,7 +3107,6 @@ describe("PreviewManager", () => {
           armedTabId: "tab_race_a",
         });
 
-        // Nothing ever captured the armed tab, so the slot goes stale and stops blocking starts.
         yield* TestClock.adjust(10_000);
         yield* manager.startRecording("tab_race_b");
         takeGrant();
@@ -3070,7 +3125,6 @@ describe("PreviewManager", () => {
 
         yield* manager.startRecording("tab_race_a");
         yield* TestClock.adjust(10_000);
-        // The handler cannot read a clock, so the expiry fiber must have dropped the frame.
         takeGrant();
         expect(grants).toEqual([{}]);
 
@@ -3183,7 +3237,6 @@ describe("PreviewManager", () => {
         yield* manager.startRecording("tab_cursor_reload", options);
         for (const recording of [true, false]) {
           if (!recording) yield* manager.stopRecording("tab_cursor_reload");
-          // A new document has lost the previous preload's cursor overlay.
           cursorActive = false;
           const restored = new Promise<void>((resolve) => {
             cursorUpdated = resolve;
@@ -3287,7 +3340,6 @@ describe("PreviewManager", () => {
         yield* manager.startRecording("tab_recording_warmup_failure");
         expect(capturePage).toHaveBeenCalledTimes(2);
 
-        // The armed tab answers exactly one display-media request, then further requests are denied.
         const handler = host.displayMediaHandler();
         const streams: Array<{ video?: unknown }> = [];
         handler?.({ frame: host.mainFrame }, (value) => streams.push(value));
@@ -3370,6 +3422,7 @@ describe("PreviewManager", () => {
         const jpeg = Buffer.from("shared-preview-frame");
         const capturePage = vi.fn(async () => ({
           toJPEG: () => jpeg,
+          toBitmap: () => jpeg,
           getSize: () => ({ width: 1280, height: 720 }),
         }));
         fromId.mockReturnValue({
@@ -3381,7 +3434,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -3528,6 +3581,7 @@ describe("PreviewManager", () => {
         const jpeg = Buffer.from("shared-preview-frame");
         const capturePage = vi.fn(async () => ({
           toJPEG: () => jpeg,
+          toBitmap: () => jpeg,
           getSize: () => ({ width: 1280, height: 720 }),
         }));
         fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
@@ -3603,6 +3657,7 @@ describe("PreviewManager", () => {
         const jpeg = Buffer.from("retry-preview-frame");
         const capturePage = vi.fn(async () => ({
           toJPEG: () => jpeg,
+          toBitmap: () => jpeg,
           getSize: () => ({ width: 1280, height: 720 }),
         }));
         fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
@@ -3634,6 +3689,7 @@ describe("PreviewManager", () => {
         const jpeg = Buffer.from("reloaded-preview-frame");
         const capturePage = vi.fn(async () => ({
           toJPEG: () => jpeg,
+          toBitmap: () => jpeg,
           getSize: () => ({ width: 1280, height: 720 }),
         }));
         fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
@@ -3657,11 +3713,62 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("encodes a picture-in-picture frame only when the page changes", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        let page = "static-page";
+        let pixelsReadable = true;
+        const toJPEG = vi.fn((pixels: string) => Buffer.from(`jpeg:${pixels}`));
+        const capturePage = vi.fn(async () => {
+          const pixels = page;
+          return {
+            toJPEG: () => toJPEG(pixels),
+            toBitmap: () => (pixelsReadable ? Buffer.from(pixels) : Buffer.alloc(0)),
+            getSize: () => ({ width: 1280, height: 720 }),
+          };
+        });
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
+        const { pictureInPictureWindow, send } = makeTestPictureInPictureWindow();
+        browserWindowConstructor.mockImplementation(function () {
+          return pictureInPictureWindow;
+        });
+
+        yield* manager.createTab("tab_pip_unchanged");
+        yield* manager.registerWebview("tab_pip_unchanged", 42);
+        yield* manager.openPictureInPicture("tab_pip_unchanged");
+        yield* TestClock.adjust(100);
+
+        expect(capturePage).toHaveBeenCalledTimes(2);
+        expect(toJPEG).toHaveBeenCalledOnce();
+        expect(send).toHaveBeenCalledOnce();
+
+        page = "changed-page";
+        yield* TestClock.adjust(100);
+
+        expect(toJPEG).toHaveBeenCalledTimes(2);
+        expect(send).toHaveBeenCalledTimes(2);
+        expect(send).toHaveBeenLastCalledWith(
+          "desktop:preview-pip-frame",
+          expect.objectContaining({ data: Buffer.from("jpeg:changed-page").toString("base64") }),
+        );
+
+        // A frame whose pixels cannot be read has no fingerprint and is still delivered.
+        pixelsReadable = false;
+        yield* TestClock.adjust(100);
+
+        expect(toJPEG).toHaveBeenCalledTimes(3);
+        expect(send).toHaveBeenCalledTimes(3);
+        yield* manager.closePictureInPicture("tab_pip_unchanged");
+      }),
+    ),
+  );
+
   effectIt.effect("drops empty frames before picture-in-picture delivery", () =>
     withManager((manager) =>
       Effect.gen(function* () {
         const validImage: TestCapturedPreviewImage = {
           toJPEG: () => Buffer.from("valid-preview-frame"),
+          toBitmap: () => Buffer.from("valid-preview-frame"),
           getSize: () => ({ width: 1280, height: 720 }),
         };
         const capturePage = vi.fn(async () => validImage);
@@ -3735,10 +3842,7 @@ describe("PreviewManager", () => {
         }));
         fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
         const { pictureInPictureWindow: initializingWindow } = makeTestPictureInPictureWindow(
-          () =>
-            new Promise<void>(() => {
-              // Simulate a renderer load that never settles.
-            }),
+          () => new Promise<void>(() => {}),
         );
         const { pictureInPictureWindow: reopenedWindow } = makeTestPictureInPictureWindow();
         browserWindowConstructor
@@ -3880,7 +3984,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           isFocused: () => true,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
@@ -4026,7 +4130,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           isFocused: () => true,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
@@ -4035,7 +4139,6 @@ describe("PreviewManager", () => {
           on: vi.fn(),
           once: vi.fn(),
           off: vi.fn(),
-          // A wedged compositor leaves `capturePage` pending forever.
           capturePage: vi.fn(() => new Promise(() => {})),
           ipc: {
             on: vi.fn((channel: string, listener: typeof onPicked) => {
@@ -4084,13 +4187,74 @@ describe("PreviewManager", () => {
         expect(pick.pollUnsafe()).toBeUndefined();
 
         yield* TestClock.adjust("6 seconds");
-        // The pick has to give up on the crop rather than strand the renderer,
-        // which would leave the composer stuck on "Capturing…".
         const result = yield* Fiber.join(pick);
         expect(result?.annotation.screenshot).toBeNull();
         expect(result?.screenshotFailed).toBe(true);
         expect(result?.submission).toBe("send");
         expect(webviewSend).toHaveBeenCalledWith("preview:annotation-captured");
+      }),
+    ),
+  );
+
+  effectIt.effect("crops the picked area out of a full-page capture at device scale", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        let onPicked: ((event: unknown, ...args: unknown[]) => void) | undefined;
+        const crop = vi.fn((rect: Electron.Rectangle) => ({
+          getSize: () => ({ width: rect.width, height: rect.height }),
+          toDataURL: () => "data:image/png;base64,cropped",
+        }));
+        const capturePage = vi.fn(async () => ({
+          getSize: () => ({ width: 2000, height: 1200 }),
+          crop,
+        }));
+        fromId.mockReturnValue(
+          Object.assign(makeTestPreviewWebContents(capturePage as never), {
+            isFocused: () => true,
+            once: vi.fn(),
+            ipc: {
+              on: vi.fn((channel: string, listener: typeof onPicked) => {
+                if (channel === "preview:element-picked") onPicked = listener;
+              }),
+              off: vi.fn(),
+              removeListener: vi.fn(),
+            },
+          }),
+        );
+
+        yield* manager.createTab("tab_1");
+        yield* manager.registerWebview("tab_1", 42);
+        const pick = yield* manager.pickElement("tab_1").pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        onPicked?.(
+          {},
+          {
+            id: "annotation_1",
+            pageUrl: "https://example.com",
+            pageTitle: "Example",
+            comment: "Tighten this spacing",
+            elements: [],
+            regions: [{ id: "region_1", rect: { x: 5, y: 6, width: 20, height: 30 } }],
+            strokes: [],
+            styleChanges: [],
+            screenshot: null,
+            createdAt: "2026-06-11T00:00:00.000Z",
+          },
+          { x: 5, y: 6, width: 20, height: 30 },
+          "attach",
+          2,
+        );
+
+        const result = yield* Fiber.join(pick);
+        expect(capturePage).toHaveBeenCalledWith();
+        expect(crop).toHaveBeenCalledWith({ x: 10, y: 12, width: 40, height: 60 });
+        expect(result?.screenshotFailed).toBeUndefined();
+        expect(result?.annotation.screenshot).toEqual({
+          dataUrl: "data:image/png;base64,cropped",
+          width: 40,
+          height: 60,
+          cropRect: { x: 5, y: 6, width: 20, height: 30 },
+        });
       }),
     ),
   );
@@ -4105,7 +4269,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           isFocused: () => true,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
@@ -4151,18 +4315,14 @@ describe("PreviewManager", () => {
         yield* manager.registerWebview("tab_1", 42);
         const firstPick = yield* manager.pickElement("tab_1").pipe(Effect.forkChild);
         yield* Effect.yieldNow;
-        // The first pick submits and its crop hangs.
         onPicked?.({}, annotation, null, "send");
         yield* Effect.yieldNow;
 
-        // A second pick on the same tab replaces the first, which resumes null.
         const secondPick = yield* manager.pickElement("tab_1").pipe(Effect.forkChild);
         yield* Effect.yieldNow;
         expect(yield* Fiber.join(firstPick)).toBeNull();
         webviewSend.mockClear();
 
-        // The first pick's crop times out while the second pick is live. It
-        // must not signal the overlay, which would tear down the second pick.
         yield* TestClock.adjust("6 seconds");
         yield* Effect.yieldNow;
         expect(webviewSend).not.toHaveBeenCalledWith("preview:annotation-captured");
@@ -4190,7 +4350,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -4233,7 +4393,6 @@ describe("PreviewManager", () => {
         yield* Effect.yieldNow;
         expect(goForward).toHaveBeenCalledOnce();
 
-        // Ignores unknown payloads and never navigates when history is exhausted.
         mouseNavigate?.({}, { direction: "sideways" });
         canGoBack = false;
         mouseNavigate?.({}, { direction: "back" });

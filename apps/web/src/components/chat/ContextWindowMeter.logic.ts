@@ -9,7 +9,8 @@ import {
 } from "../../providerInstances";
 import { getTriggerDisplayModelName, type ModelEsque } from "./providerIconUtils";
 
-const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
+// Used when the provider did not report its cache TTL: Claude's 1h cache plus slack.
+const CLAUDE_RESUME_COMPACTION_FALLBACK_MS = 70 * 60_000;
 const CLAUDE_RESUME_COMPACTION_TOKENS = 100_000;
 
 export function providerSupportsManualCompaction(
@@ -64,6 +65,7 @@ export function shouldOfferResumeCompaction(input: {
   readonly provider: string | null | undefined;
   readonly usedTokens: number | null | undefined;
   readonly updatedAt: string | null | undefined;
+  readonly promptCacheTtlMs?: number | undefined;
   readonly now: string;
 }): boolean {
   if (
@@ -78,7 +80,7 @@ export function shouldOfferResumeCompaction(input: {
   return (
     Number.isFinite(updatedAt) &&
     Number.isFinite(now) &&
-    now - updatedAt >= CLAUDE_RESUME_COMPACTION_MINUTES * 60_000
+    now - updatedAt >= (input.promptCacheTtlMs ?? CLAUDE_RESUME_COMPACTION_FALLBACK_MS)
   );
 }
 
@@ -109,23 +111,10 @@ export function formatContextWindowCompactionMessage(
     : "Context compacts automatically when needed.";
 }
 
-/**
- * Whether the footer should hold the meter's slot before a snapshot exists.
- *
- * The snapshot comes from thread activities, which load after the shell.
- * Reserving the slot while the detail loads, for a started thread, keeps the
- * attach button still until the meter mounts. Once the detail is in, a
- * missing snapshot means there is no usage to show and nothing is reserved.
- *
- * The meter renders from stored activities whatever the provider's state, so
- * only a provider known not to stream usage skips the reservation. An unknown
- * provider (catalog still loading, or the thread's provider disabled) reserves.
- */
 export function shouldReserveContextWindowMeter(input: {
   readonly meterEnabled: boolean;
   readonly detailLoading: boolean;
   readonly threadStarted: boolean;
-  /** `null` while the thread's provider is not in the catalog. */
   readonly providerReportsContextWindow: boolean | null;
 }): boolean {
   return (

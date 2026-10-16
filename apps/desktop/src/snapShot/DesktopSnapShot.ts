@@ -88,6 +88,7 @@ import {
   snapShotShortcutRegistrationFailureMessage,
   snapShotShortcutSystemConflict,
 } from "./snapShot.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const MAX_CAPTURE_WIDTH = 2_560;
 const MAX_CAPTURE_HEIGHT = 1_600;
@@ -186,7 +187,6 @@ export class DesktopSnapShot extends Context.Service<
       shortcut: SnapShotShortcut,
     ) => Effect.Effect<DesktopSnapShotShortcutAvailability>;
     readonly setShortcutSuppressed: (suppressed: boolean) => Effect.Effect<void>;
-    /** Capture the foreground window in place, including T3 Code itself. */
     readonly capture: Effect.Effect<void, DesktopSnapShotError>;
     readonly listPending: Effect.Effect<
       ReadonlyArray<DesktopPendingSnapShot>,
@@ -727,6 +727,7 @@ export const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(context);
   const captureDirectory = path.join(environment.stateDir, "snap-shots");
   const linuxAppId = environment.linuxDesktopEntryName.replace(/\.desktop$/, "");
+  const home = yield* HostProcess.HomeDirectory;
   let shortcutVerified = false;
   const gnomeSetupPaths = {
     bundle: environment.isPackaged
@@ -757,7 +758,7 @@ export const make = Effect.gen(function* () {
     dataHome: path.dirname(environment.linuxApplicationsDir),
   };
   const shiftShortcutWorkerPath = path.join(__dirname, "snapShot", "GlobalShiftShortcutWorker.cjs");
-  const shortcutConfig = new CaptureShortcutConfig();
+  const shortcutConfig = new CaptureShortcutConfig(home);
   const accessibilityWorkerPath = path.join(
     __dirname,
     "snapShot",
@@ -768,7 +769,6 @@ export const make = Effect.gen(function* () {
     path.join(__dirname, "snapShot", "RegionSnapShotWorker.cjs"),
   );
   let registeredAccelerator: string | undefined;
-  // False until the first applySettings; the first pass must always register.
   let initialized = false;
   let portalShortcut: PortalCaptureShortcut | undefined;
   let shortcutGeneration = 0;
@@ -856,7 +856,7 @@ export const make = Effect.gen(function* () {
   const prepareCapture = Effect.fn("desktop.snapShot.prepareCapture")(function* (
     settings: ClientSettings,
   ) {
-    const id = yield* crypto.randomUUIDv4.pipe(Effect.mapError((cause) => captureFailure(cause)));
+    const id = yield* crypto.randomUUIDv4().pipe(Effect.mapError((cause) => captureFailure(cause)));
     const mode = captureMode(environment.platform);
     if (mode === "unavailable") {
       return yield* new DesktopSnapShotError({ operation: "unsupported", captureId: id });
@@ -923,7 +923,6 @@ export const make = Effect.gen(function* () {
       const appIconDataUrl = yield* Effect.promise(() =>
         iconDataUrl(source, active, environment.platform),
       );
-      // Native labels are unbounded; keep a valid screenshot when its metadata is too long.
       const appIdentifier = boundedSnapShotString(
         active?.platform === "macos" ? active.owner.bundleId : linuxWindow?.appIdentifier,
         255,
@@ -969,8 +968,6 @@ export const make = Effect.gen(function* () {
     if (!settings.snapShotEnabled) {
       return yield* new DesktopSnapShotError({ operation: "disabled" });
     }
-    // Only source acquisition and the initial handoff require exclusive access.
-    // Each captured image can finish its own accessibility read and persistence.
     const prepared = yield* prepareCapture(settings).pipe(
       Effect.tapError((error) =>
         (error.captureId ? discardCapture(error.captureId) : Effect.void).pipe(
@@ -1184,7 +1181,7 @@ export const make = Effect.gen(function* () {
         shortcut,
         shortcutRegistered: false,
         shortcutBinding: niriCaptureBinding(linuxAppId),
-        shortcutConfigPath: niriCaptureConfigPath(),
+        shortcutConfigPath: niriCaptureConfigPath(home),
         shortcutActionRegistered: registered,
         shortcutMessage: registered
           ? "Set up the shortcut to add it to your Niri config."
@@ -1326,8 +1323,6 @@ export const make = Effect.gen(function* () {
     if (action === "test-mac-capture") {
       if (environment.platform !== "darwin")
         return yield* new DesktopSnapShotSetupError({ action, reason: "unsupported-session" });
-      // Exercise the real capture path during setup without attaching a snapshot
-      // or running capture feedback. The temporary image is discarded on failure too.
       yield* Effect.scoped(
         Effect.gen(function* () {
           const directory = yield* fileSystem.makeTempDirectoryScoped({
@@ -1474,8 +1469,8 @@ export const make = Effect.gen(function* () {
         const configPath =
           selectedPath ??
           (desktop === "niri"
-            ? niriCaptureConfigPath()
-            : (await hyprlandCaptureShortcut(linuxAppId)).shortcutConfigPath);
+            ? niriCaptureConfigPath(home)
+            : (await hyprlandCaptureShortcut(linuxAppId, home)).shortcutConfigPath);
         return shortcutConfig.preview({ desktop, path: configPath, appId: linuxAppId }, request);
       },
       catch: (cause) =>
@@ -1538,9 +1533,6 @@ export const make = Effect.gen(function* () {
             )
           : environment.platform === "darwin"
             ? Effect.gen(function* () {
-                // Permissions can change in System Settings at any time. Surface a
-                // revocation on every read, and re-register the shortcut once a
-                // previously missing permission is granted again.
                 const settings = yield* Ref.get(settingsRef);
                 const macPermissions = currentMacPermissions();
                 const message = settings.snapShotEnabled
@@ -1562,7 +1554,6 @@ export const make = Effect.gen(function* () {
       ),
       Effect.flatMap((state) =>
         Effect.gen(function* () {
-          // Keep the session identity available even when its capability probe fails.
           const linuxDesktop =
             state.mode === "portal"
               ? process.env.XDG_CURRENT_DESKTOP?.toLowerCase()
@@ -1593,7 +1584,7 @@ export const make = Effect.gen(function* () {
               : undefined;
           const hyprlandShortcut =
             state.linuxBackend === "hyprland"
-              ? yield* Effect.promise(() => hyprlandCaptureShortcut(linuxAppId))
+              ? yield* Effect.promise(() => hyprlandCaptureShortcut(linuxAppId, home))
               : undefined;
           return {
             ...state,
@@ -1609,7 +1600,7 @@ export const make = Effect.gen(function* () {
               : {}),
             ...hyprlandShortcut,
             ...(state.linuxBackend === "niri"
-              ? { shortcutConfigPath: niriCaptureConfigPath() }
+              ? { shortcutConfigPath: niriCaptureConfigPath(home) }
               : {}),
             ...(kdeHelper
               ? {

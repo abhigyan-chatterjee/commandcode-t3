@@ -10,23 +10,26 @@ import { rpcRequestDuration, rpcRequestsTotal, withMetrics } from "./Metrics.ts"
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 
 /**
- * The `rpc.aggregate` span attribute of every WebSocket RPC. Trace queries and dashboards group by
- * these labels, so they keep their historical values even where they differ from the method
- * prefix. Adding an RPC to `WsRpcGroup` without a label is a type error.
+ * Trace queries and dashboards group by these labels, so they keep their historical values
+ * even where they differ from the method prefix.
  */
 const RPC_AGGREGATES = {
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.searchThreads]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.searchThread]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.searchThreadStream]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.launchThread]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: "orchestrationV2",
+  [ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput]: "orchestrationV2",
   [WS_METHODS.projectsMutate]: "orchestration",
   [WS_METHODS.serverProbe]: "server",
   [WS_METHODS.serverGetConfig]: "server",
@@ -52,6 +55,9 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverCommitDesktopUpdate]: "server",
   [WS_METHODS.serverUpsertKeybinding]: "server",
   [WS_METHODS.serverRemoveKeybinding]: "server",
+  [WS_METHODS.serverRunStorageCleanup]: "server",
+  [WS_METHODS.serverGetStorageCleanupReport]: "server",
+  [WS_METHODS.serverGetDatabaseStorage]: "server",
   [WS_METHODS.serverGetSettings]: "server",
   [WS_METHODS.serverUpdateSettings]: "server",
   [WS_METHODS.serverSearchAcpRegistry]: "server",
@@ -72,6 +78,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetProcessResourceHistory]: "server",
   [WS_METHODS.serverGetResourceTelemetryHistory]: "server",
   [WS_METHODS.serverRetryResourceTelemetry]: "server",
+  [WS_METHODS.serverCheckOtlpEndpoint]: "server",
   [WS_METHODS.serverGetUsageSummary]: "server",
   [WS_METHODS.serverRefreshUsageRates]: "server",
   [WS_METHODS.serverSignalProcess]: "server",
@@ -101,6 +108,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.pullRequestsPreview]: "pull-requests",
   [WS_METHODS.pullRequestsChecks]: "pull-requests",
   [WS_METHODS.pullRequestsActivity]: "pull-requests",
+  [WS_METHODS.pullRequestsReviewGuide]: "pull-requests",
+  [WS_METHODS.pullRequestsGenerateReviewGuide]: "pull-requests",
   [WS_METHODS.pullRequestsThreadComments]: "pull-requests",
   [WS_METHODS.pullRequestsDiffFileContents]: "pull-requests",
   [WS_METHODS.pullRequestsFilesViewed]: "pull-requests",
@@ -114,6 +123,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.pullRequestsSetReaction]: "pull-requests",
   [WS_METHODS.pullRequestsSetFilesViewed]: "pull-requests",
   [WS_METHODS.pullRequestsInvalidate]: "pull-requests",
+  [WS_METHODS.pullRequestsReportState]: "pull-requests",
   [WS_METHODS.pullRequestsSubscribeRefreshes]: "pull-requests",
   [WS_METHODS.pullRequestsReviewerCandidates]: "pull-requests",
   [WS_METHODS.pullRequestsRequestReviewers]: "pull-requests",
@@ -135,6 +145,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.projectsCreateNew]: "orchestration",
   [WS_METHODS.shellOpenInEditor]: "workspace",
   [WS_METHODS.filesystemBrowse]: "workspace",
+  [WS_METHODS.filesystemGetMetadata]: "workspace",
   [WS_METHODS.agentSessionsScan]: "workspace",
   [WS_METHODS.agentSessionsImport]: "workspace",
   [WS_METHODS.assetsCreateUrl]: "workspace",
@@ -142,6 +153,10 @@ const RPC_AGGREGATES = {
   [WS_METHODS.attachmentsCreateUploadUrl]: "workspace",
   [WS_METHODS.attachmentsDelete]: "workspace",
   [WS_METHODS.providerUploadFeedback]: "provider",
+  [WS_METHODS.mcpAppsCallTool]: "provider",
+  [WS_METHODS.mcpAppsToolInfo]: "provider",
+  [WS_METHODS.mcpAppsUpdateModelContext]: "provider",
+  [WS_METHODS.mcpAppsReadResource]: "provider",
   [WS_METHODS.subscribeVcsStatus]: "vcs",
   [WS_METHODS.subscribeWorktreeSetup]: "vcs",
   [WS_METHODS.worktreeSetupCancel]: "vcs",
@@ -177,6 +192,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.previewClose]: "preview",
   [WS_METHODS.previewList]: "preview",
   [WS_METHODS.previewClearProfile]: "preview",
+  [WS_METHODS.previewReportProfiles]: "preview",
   [WS_METHODS.previewReportStatus]: "preview",
   [WS_METHODS.subscribePreviewEvents]: "preview",
   [WS_METHODS.subscribeDiscoveredLocalServers]: "preview",
@@ -208,19 +224,13 @@ const RPC_METHODS_WITH_TRACING_DISABLED: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Records each WebSocket RPC's span and request metrics. `ws.ts` adds it to the server's group
- * after `RpcScopeAuthorization`, so it wraps authorization and also records rejected calls.
+ * `ws.ts` adds it to the server's group after `RpcScopeAuthorization`, so it wraps
+ * authorization and also records rejected calls.
  */
 export class RpcInstrumentation extends RpcMiddleware.Service<RpcInstrumentation>()(
   "t3/server/RpcInstrumentation",
 ) {}
 
-/**
- * Wraps each WebSocket RPC call in its `ws.rpc.<method>` span and records its request counter and
- * duration. For a stream RPC, the middleware receives the whole stream run, so the span and the
- * metrics cover the subscription until it ends, fails, or is interrupted. Methods in
- * `RPC_METHODS_WITH_TRACING_DISABLED` record metrics but no spans, for the call or anything it runs.
- */
 export const rpcInstrumentationLayer = Layer.succeed(RpcInstrumentation)((effect, { rpc }) => {
   const method = rpc._tag;
   const measured = effect.pipe(

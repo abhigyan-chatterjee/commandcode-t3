@@ -1,3 +1,4 @@
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as Stream from "effect/Stream";
 import {
   EventId,
@@ -31,7 +32,8 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
 
-import { PullRequestProviderError } from "../pullRequest/PullRequestProvider.ts";
+import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
+import * as GitManager from "../git/GitManager.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -122,7 +124,6 @@ function makeLink(
   };
 }
 
-/** The shell the fake projection store serves: one project and its threads. */
 interface TestShellSnapshot {
   readonly snapshotSequence: number;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
@@ -147,7 +148,7 @@ function makeSummary(
   overrides: Partial<PullRequestSummary> = {},
 ): PullRequestSummary {
   return {
-    provider: "github",
+    provider: SourceControlProviderKind.make("github"),
     projectId: input.projectId,
     repository: input.repository,
     number: input.number,
@@ -222,8 +223,10 @@ const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: 
       invalidate: options.invalidate ?? (() => Effect.void),
       subscribeStateChanges: Effect.succeed(Stream.fromQueue(stateChanges)),
     }),
+    Layer.mock(GitManager.GitManager)({
+      subscribePullRequestStateChanges: Effect.succeed(Stream.empty),
+    }),
     Layer.mock(ProjectionStore.ProjectionStoreV2)({
-      // Mirrors the store's filter: active threads that have at least one link.
       getThreadsWithPullRequests: (threadId) =>
         Queue.offer(snapshotReads, undefined).pipe(
           Effect.andThen(Ref.get(snapshots)),
@@ -359,7 +362,6 @@ function commandRan(threadId: ThreadId, input: string): OrchestrationV2DomainEve
   };
 }
 
-/** What the reactor would have persisted, so the next sweep sees its own writes. */
 function applySync(
   snapshot: TestShellSnapshot,
   commands: ReadonlyArray<SyncCommand>,
@@ -491,7 +493,6 @@ describe("PullRequestSyncReactor", () => {
             ],
           );
           assert.strictEqual((yield* Ref.get(fixture.stackCalls)).length, 1);
-          // Reads only linked threads, never the full shell snapshot of every thread.
           assert.strictEqual(yield* Ref.get(fixture.shellSnapshotReads), 0);
         }).pipe(Effect.provide(fixture.layer));
       }),
@@ -571,7 +572,6 @@ describe("PullRequestSyncReactor", () => {
 
           yield* sweepAgain(fixture, reactor);
 
-          // Still open on an active thread, so the host was asked again, but nothing changed.
           assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 2);
           assert.strictEqual((yield* Ref.get(fixture.stackCalls)).length, 1);
           assert.strictEqual((yield* Ref.get(fixture.syncCommands)).length, 1);
@@ -682,7 +682,6 @@ describe("PullRequestSyncReactor", () => {
           const reactor = yield* startAndSweep(fixture);
           yield* Ref.set(state, "merged");
 
-          // The clock stays put: the next sweep is still a minute away.
           yield* Queue.offer(fixture.stateChanges, {
             host: "github.com",
             repository: "owner/repository",
@@ -801,7 +800,6 @@ describe("PullRequestSyncReactor", () => {
           yield* Effect.forEach([2, 3, 4], request, { discard: true });
           yield* Deferred.succeed(release, undefined);
           yield* reactor.drain;
-          // One sweep for the first link and one for the three that arrived while it read.
           assert.strictEqual(yield* Queue.size(fixture.snapshotReads), 2);
           assert.deepStrictEqual(
             (yield* Ref.get(fixture.summaryCalls)).map((ref) => ref.number).toSorted(),
@@ -1005,7 +1003,7 @@ describe("PullRequestSyncReactor", () => {
             Effect.gen(function* () {
               if (input.host === "github.com" && (yield* Clock.currentTimeMillis) < retryAt) {
                 const paused = new PullRequestProviderError({
-                  provider: "github",
+                  provider: SourceControlProviderKind.make("github"),
                   operation: "getChangeRequestSummary",
                   reason: "rate-limited",
                   detail: "paused",
@@ -1027,13 +1025,11 @@ describe("PullRequestSyncReactor", () => {
         );
 
         yield* Effect.gen(function* () {
-          // The first refused read pauses the host, so the sweep does not try the other.
           const reactor = yield* startAndSweep(fixture);
           assert.deepStrictEqual(yield* githubReads, [7]);
           assert.strictEqual(skips.length, 1);
           assert.deepInclude(skips[0]![1], { count: 1 });
 
-          // A requested refresh waits for the pause like the sweep does.
           yield* reactor.requestSync({
             host: "github.com",
             repository: "owner/repository",
@@ -1045,7 +1041,6 @@ describe("PullRequestSyncReactor", () => {
           yield* sweepAgain(fixture, reactor);
           assert.deepStrictEqual(yield* githubReads, [7]);
           assert.strictEqual(skips.length, 1);
-          // Other hosts keep their cadence.
           assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 4);
 
           yield* sweepAgain(fixture, reactor);
@@ -1075,7 +1070,7 @@ describe("PullRequestSyncReactor", () => {
                 operation: "stack",
                 detail: "paused",
                 cause: new PullRequestProviderError({
-                  provider: "github",
+                  provider: SourceControlProviderKind.make("github"),
                   operation: "getChangeRequestStack",
                   reason: "rate-limited",
                   detail: "paused",
@@ -1096,7 +1091,6 @@ describe("PullRequestSyncReactor", () => {
           yield* sweepAgain(fixture, reactor);
           assert.deepStrictEqual(yield* reads, [1, 1]);
 
-          // At retryAt the pull request is read again, stack included.
           yield* sweepAgain(fixture, reactor);
           assert.deepStrictEqual(yield* reads, [2, 2]);
           assert.strictEqual((yield* Ref.get(fixture.syncCommands)).length, 1);
@@ -1128,18 +1122,15 @@ describe("PullRequestSyncReactor", () => {
 
         yield* Effect.gen(function* () {
           const reactor = yield* startAndSweep(fixture);
-          // The agent merges from a shell during its turn, inside the summary cache window.
           yield* Ref.set(state, "merged");
           yield* Ref.set(fixture.summaryCalls, []);
 
           yield* Queue.offerAll(fixture.domainEvents, [
-            // A run that only reads its pull request costs no host read when it ends.
             commandRan(ThreadId.make("other"), "gh pr view 9"),
             runUpdated(ThreadId.make("other"), "completed"),
             commandRan(ThreadId.make("agent"), "gh pr merge 7 --squash 2>&1 | tail -3"),
             runUpdated(ThreadId.make("agent"), "completed"),
           ]);
-          // The agent thread's lookup, then the requested sweep.
           yield* Queue.take(fixture.snapshotReads);
           yield* Queue.take(fixture.snapshotReads);
           yield* reactor.drain;

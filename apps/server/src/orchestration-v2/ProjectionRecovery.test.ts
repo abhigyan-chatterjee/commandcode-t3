@@ -23,13 +23,33 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as EventSink from "./EventSink.ts";
+import * as EventStore from "./EventStore.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 import { restartContinuationRun } from "./RestartContinuation.ts";
 
 const layerTest = Layer.mergeAll(ProjectionStore.layer, EffectOutbox.layer).pipe(
   Layer.provideMerge(SqlitePersistence.layerMemory),
+);
+const layerRecoveryTest = ProviderRuntimeRecovery.layer.pipe(
+  Layer.provideMerge(
+    EventSink.layer.pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(
+          EventStore.layer,
+          ProjectionStore.layer,
+          EffectOutbox.layer,
+          IdAllocator.layer,
+        ).pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+      ),
+    ),
+  ),
+  Layer.provide(ServerSettings.layerTest()),
 );
 const providerInstanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId: providerInstanceId, model: "gpt-5.4" };
@@ -113,6 +133,133 @@ const createRun = Effect.fn(function* (
   return runId;
 });
 
+it.effect.each(["startup", "shutdown"] as const)(
+  "%s cancels queued buffered wakes and holds durable messages",
+  (trigger) =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const recovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+      const now = yield* DateTime.now;
+      const bufferedThreads = [] as ThreadId[];
+      const durableThreads = [] as ThreadId[];
+      for (const kind of ["buffered", "user", "notification", "delegated"] as const) {
+        const threadId = yield* createThread(`wake:${trigger}:${kind}`);
+        const buffered = kind === "buffered";
+        (buffered ? bufferedThreads : durableThreads).push(threadId);
+        const messageId = MessageId.make(`message:${threadId}`);
+        const runId = yield* createRun(threadId, "queued", {
+          userMessageId: messageId,
+          startedAt: null,
+          queuePosition: 1,
+        });
+        yield* createRun(threadId, "completed", { ordinal: 2 });
+        yield* projections.apply({
+          id: EventId.make(`message:${threadId}`),
+          type: "message.updated",
+          threadId,
+          runId,
+          occurredAt: now,
+          payload: {
+            id: messageId,
+            threadId,
+            runId,
+            nodeId: null,
+            role: "user",
+            text: "Queued work",
+            attachments: [],
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+            createdBy: kind === "user" ? "user" : "agent",
+            creationSource: buffered ? "provider" : "server",
+            ...(kind === "user" || kind === "delegated"
+              ? {}
+              : {
+                  notification: {
+                    source: { kind: "background_task" as const },
+                    outcome: "updated" as const,
+                    summary: "Background activity updated",
+                  },
+                }),
+            ...(kind === "delegated"
+              ? { delegatedCompletion: { parentRunId: runId, generation: 1, taskIds: [] } }
+              : {}),
+          },
+        });
+      }
+      assert.deepEqual(
+        new Set(yield* projections.getRecoveryThreadIds("runtime")),
+        new Set([...bufferedThreads, ...durableThreads]),
+      );
+      const summary = yield* recovery.reconcile(trigger);
+      assert.equal(summary.terminalizedRuns, 1);
+      for (const threadId of bufferedThreads) {
+        const projection = yield* projections.getThreadProjection(threadId);
+        assert.equal(projection.runs[0]?.status, "cancelled");
+        assert.isNotNull(projection.runs[0]?.completedAt);
+        assert.isNull(projection.runs[0]?.queuePosition);
+        assert.equal(projection.runs[1]?.status, "completed");
+      }
+      for (const threadId of durableThreads) {
+        const projection = yield* projections.getThreadProjection(threadId);
+        assert.equal(projection.runs[0]?.status, "queued");
+        assert.isTrue(projection.runs[0]?.queueHeld);
+      }
+      assert.deepEqual(yield* projections.getRecoveryThreadIds("runtime"), []);
+    }).pipe(Effect.provide(layerRecoveryTest)),
+);
+
+it.effect("stops a session its thread detached, which kept its live status", () =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const recovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+    const now = yield* DateTime.now;
+    const threadId = yield* createThread("detached-session");
+    const providerSessionId = ProviderSessionId.make("session:recovery:detached");
+    yield* projections.apply({
+      id: EventId.make("event:recovery:detached-session:attached"),
+      type: "provider-session.attached",
+      threadId,
+      driver,
+      providerInstanceId,
+      occurredAt: now,
+      payload: {
+        id: providerSessionId,
+        driver,
+        providerInstanceId,
+        status: "ready",
+        cwd: "/workspace",
+        model: modelSelection.model,
+        capabilities: CodexProviderCapabilitiesV2,
+        createdAt: now,
+        updatedAt: now,
+        lastError: null,
+      },
+    });
+    yield* projections.apply({
+      id: EventId.make("event:recovery:detached-session:detached"),
+      type: "provider-session.detached",
+      threadId,
+      driver,
+      providerInstanceId,
+      occurredAt: now,
+      payload: { providerSessionId, detachedAt: now, reason: "Thread settled." },
+    });
+    assert.deepEqual(yield* projections.getRecoveryThreadIds("runtime"), [threadId]);
+
+    const summary = yield* recovery.reconcile("startup");
+
+    assert.equal(summary.stoppedSessions, 1);
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ readonly status: string }>`
+      SELECT status FROM orchestration_v2_projection_provider_sessions
+      WHERE provider_session_id = ${providerSessionId}
+    `;
+    assert.deepEqual(rows, [{ status: "stopped" }]);
+    assert.deepEqual(yield* projections.getRecoveryThreadIds("runtime"), []);
+  }).pipe(Effect.provide(layerRecoveryTest)),
+);
+
 it.effect("selects unfinished recovery work without reading settled thread histories", () =>
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -195,8 +342,6 @@ it.effect("selects unfinished recovery work without reading settled thread histo
       },
     });
 
-    // This historical payload cannot be decoded. Candidate discovery must not
-    // materialize it while deciding which threads have work to reconcile.
     yield* sql`
       UPDATE orchestration_v2_projection_runs SET payload_json = '{broken'
       WHERE thread_id = ${ThreadId.make("thread:recovery:settled-599")}
@@ -231,7 +376,7 @@ it.effect("recovers terminal subagent results until their cross-thread transfer 
     const now = yield* DateTime.now;
     const parent = yield* createThread("subagent-parent");
     const children: Array<ThreadId> = [];
-    for (const name of ["terminal", "archived", "deleted", "running"]) {
+    for (const name of ["terminal", "archived", "deleted", "running", "held", "queued"]) {
       const child = yield* createThread(`subagent-${name}`, {
         lineage: { parentThreadId: parent, relationshipToParent: "subagent", rootThreadId: parent },
         forkedFrom: { type: "node", nodeId: NodeId.make(`node:${name}`) },
@@ -239,12 +384,21 @@ it.effect("recovers terminal subagent results until their cross-thread transfer 
         deletedAt: name === "deleted" ? now : null,
       });
       yield* createRun(child, name === "running" ? "running" : "completed");
+      if (name === "held" || name === "queued") {
+        yield* createRun(child, "queued", {
+          ordinal: 2,
+          startedAt: null,
+          ...(name === "held" ? { queueHeld: true } : {}),
+        });
+      }
       children.push(child);
     }
+    const terminalChildren = new Set([children[0]!, children[1]!, children[4]!]);
     assert.deepEqual(
       new Set(yield* projections.getRecoveryThreadIds("subagent-results")),
-      new Set(children.slice(0, 2)),
+      terminalChildren,
     );
+
     const completed = children[0]!;
     const transferId = ContextTransferId.make("transfer:recovery:subagent-result");
     yield* projections.apply({
@@ -273,7 +427,10 @@ it.effect("recovers terminal subagent results until their cross-thread transfer 
     });
     const archivedChild = children[1];
     assert.isDefined(archivedChild);
-    assert.deepEqual(yield* projections.getRecoveryThreadIds("subagent-results"), [archivedChild]);
+    assert.deepEqual(
+      new Set(yield* projections.getRecoveryThreadIds("subagent-results")),
+      new Set([archivedChild, children[4]!]),
+    );
     assert.deepEqual(yield* projections.getUnreadableThreadIds(), []);
     yield* sql`
       UPDATE orchestration_v2_projection_context_transfers SET payload_json = '{}'
@@ -284,6 +441,88 @@ it.effect("recovers terminal subagent results until their cross-thread transfer 
       new Set([parent, completed]),
     );
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect.each([
+  { name: "SQLite", layer: layerTest },
+  { name: "memory", layer: ProjectionStore.layerMemory },
+])("recovers only recorded follow-up results with $name projections", ({ layer }) =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const now = yield* DateTime.now;
+    const parent = yield* createThread("followup-parent");
+    const child = yield* createThread("followup-child", {
+      lineage: { parentThreadId: parent, relationshipToParent: "subagent", rootThreadId: parent },
+      forkedFrom: { type: "node", nodeId: NodeId.make("node:original") },
+    });
+    const originalRunId = yield* createRun(child, "completed");
+    yield* projections.apply({
+      id: EventId.make("event:original-result"),
+      type: "context-transfer.created",
+      threadId: parent,
+      occurredAt: now,
+      payload: {
+        id: ContextTransferId.make("transfer:original-result"),
+        type: "subagent_result",
+        sourceThreadId: child,
+        targetThreadId: parent,
+        sourcePoint: { threadId: child, runId: originalRunId },
+        basePoint: null,
+        sourceProviderInstanceId: providerInstanceId,
+        targetProviderInstanceId: providerInstanceId,
+        targetRunId: null,
+        status: "pending",
+        resolution: null,
+        createdBy: "system",
+        error: null,
+        createdAt: now,
+        updatedAt: now,
+        consumedAt: null,
+      },
+    });
+    yield* createRun(child, "completed", { ordinal: 2 });
+    assert.deepEqual(yield* projections.getRecoveryThreadIds("subagent-results"), []);
+    const taskId = NodeId.make("node:followup");
+    yield* createRun(child, "completed", { ordinal: 3, delegatedTaskId: taskId });
+    yield* createRun(child, "running", { ordinal: 4 });
+    const task = {
+      id: taskId,
+      threadId: parent,
+      runId: null,
+      parentNodeId: NodeId.make("node:parent"),
+      origin: "app_owned" as const,
+      createdBy: "agent" as const,
+      driver,
+      providerInstanceId,
+      providerThreadId: null,
+      childThreadId: child,
+      nativeTaskRef: null,
+      prompt: "Check the follow-up.",
+      title: null,
+      model: null,
+      status: "running" as const,
+      result: null,
+      startedAt: now,
+      completedAt: null,
+      updatedAt: now,
+    };
+    yield* projections.apply({
+      id: EventId.make("event:followup-task"),
+      type: "subagent.updated",
+      threadId: parent,
+      occurredAt: now,
+      payload: task,
+    });
+    assert.deepEqual(yield* projections.getRecoveryThreadIds("subagent-results"), [child]);
+    yield* projections.apply({
+      id: EventId.make("event:followup-settled"),
+      type: "subagent.updated",
+      threadId: parent,
+      occurredAt: now,
+      payload: { ...task, status: "completed", result: "Follow-up result.", completedAt: now },
+    });
+    assert.deepEqual(yield* projections.getRecoveryThreadIds("subagent-results"), []);
+  }).pipe(Effect.provide(layer)),
 );
 
 it.effect("includes shared sessions and provider-owned background rosters in recovery", () =>
@@ -406,7 +645,7 @@ it.effect("includes shared sessions and provider-owned background rosters in rec
       preparedState.providerSessions.map((session) => session.id),
       [preparedSessionId],
     );
-    assert.equal(restartContinuationRun(preparedState)?.id, preparedRunId);
+    assert.equal(restartContinuationRun(preparedState, yield* DateTime.now)?.id, preparedRunId);
     assert.deepEqual(yield* projections.getUnreadableThreadIds(), []);
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
@@ -458,7 +697,6 @@ it.effect("reads the run that owns a background roster, not a queued or resumed 
       projections
         .getRuntimeRecoveryProjection(threadId)
         .pipe(Effect.map((state) => state.runs.map((run) => run.id)));
-    // Settled with background work left, then a queued follow-up.
     const settled = yield* createThread("roster-before-queue");
     const settledRun = yield* createRun(settled, "completed", {
       providerThreadId: ProviderThreadId.make(`provider-thread:${settled}`),
@@ -466,7 +704,6 @@ it.effect("reads the run that owns a background roster, not a queued or resumed 
     const queuedRun = yield* createRun(settled, "queued", { ordinal: 2, completedAt: null });
     yield* withRoster(settled);
     assert.deepEqual(yield* runIds(settled), [settledRun, queuedRun]);
-    // A resumed queued run (ordinal 1) ended after a continuation (ordinal 2).
     const resumed = yield* createThread("roster-after-resume");
     const resumedRun = yield* createRun(resumed, "completed", {
       providerThreadId: ProviderThreadId.make(`provider-thread:${resumed}`),
@@ -479,7 +716,6 @@ it.effect("reads the run that owns a background roster, not a queued or resumed 
     });
     yield* withRoster(resumed);
     assert.deepEqual(yield* runIds(resumed), [resumedRun, continuationRun]);
-    // Without a roster, settled history is not read.
     const quiet = yield* createThread("no-roster-before-queue");
     yield* createRun(quiet, "completed");
     const quietQueued = yield* createRun(quiet, "queued", { ordinal: 2, completedAt: null });

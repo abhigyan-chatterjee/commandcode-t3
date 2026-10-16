@@ -8,6 +8,7 @@ import {
   getThemeDefinition,
   resolveThemeHalf,
   subscribeToCustomThemes,
+  themeColorToHex,
   type ThemeAppearance,
   type ThemeHalves,
   type ThemePreference,
@@ -15,7 +16,6 @@ import {
 import { useClientSettings } from "./useSettings";
 import { useTheme } from "./useTheme";
 
-/** The palette `applyTheme` paints for a preference, or the stock look when no theme applies. */
 function resolveActiveThemeColors(
   theme: ThemePreference,
   halves: ThemeHalves | null,
@@ -27,7 +27,6 @@ function resolveActiveThemeColors(
     : (getThemeColorsForMode(definition, appearance) ?? definition.colors);
 }
 
-/** The app's active theme and fonts, as handed to agent HTML renders. Stable until one changes. */
 export function useHtmlRenderTheme() {
   const { theme, resolvedTheme, themeHalves } = useTheme();
   // Custom and published palettes can be edited in place, under an unchanged preference.
@@ -40,10 +39,16 @@ export function useHtmlRenderTheme() {
   const mono = useClientSettings((settings) => settings.fontFamilyCode);
   return useMemo(
     () =>
-      htmlRenderTheme(colors, resolvedTheme, {
-        sans: appearanceFontStack(sans, HTML_RENDER_DEFAULT_FONTS.sans),
-        mono: appearanceFontStack(mono, HTML_RENDER_DEFAULT_FONTS.mono),
-      }),
+      htmlRenderTheme(
+        Object.fromEntries(
+          Object.entries(colors).map(([role, color]) => [role, themeColorToHex(color) ?? color]),
+        ) as typeof colors,
+        resolvedTheme,
+        {
+          sans: appearanceFontStack(sans, HTML_RENDER_DEFAULT_FONTS.sans),
+          mono: appearanceFontStack(mono, HTML_RENDER_DEFAULT_FONTS.mono),
+        },
+      ),
     [colors, resolvedTheme, sans, mono],
   );
 }

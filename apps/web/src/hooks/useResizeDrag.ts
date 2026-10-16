@@ -5,10 +5,9 @@ interface ResizeSession {
   edge: "left" | "right";
   resize: (width: number) => number;
   finish: (width: number, moved: boolean) => void;
-  cleanup?: () => void;
+  cleanup?: (committed: boolean) => void;
 }
 
-/** Shared pointer lifecycle for side panels, including interrupted and sub-frame drags. */
 export function useResizeDrag<T extends HTMLElement>(
   start: (event: PointerEvent<T>) => ResizeSession | null,
   resetKey?: string,
@@ -44,12 +43,10 @@ export function useResizeDrag<T extends HTMLElement>(
         if (active.target.hasPointerCapture(active.pointerId)) {
           active.target.releasePointerCapture(active.pointerId);
         }
-      } catch {
-        // Capture may already have been released by the browser.
-      }
+      } catch {}
       document.body.style.removeProperty("cursor");
       document.body.style.removeProperty("user-select");
-      active.session.cleanup?.();
+      active.session.cleanup?.(commit);
       if (commit) active.session.finish(active.width, active.moved);
     },
     [flush],
@@ -81,6 +78,7 @@ export function useResizeDrag<T extends HTMLElement>(
   };
 
   return {
+    refresh: flush,
     onPointerDown(event: PointerEvent<T>) {
       if (event.button !== 0 || drag.current) return;
       const session = start(event);
@@ -88,7 +86,7 @@ export function useResizeDrag<T extends HTMLElement>(
       try {
         event.currentTarget.setPointerCapture(event.pointerId);
       } catch {
-        session.cleanup?.();
+        session.cleanup?.(false);
         return;
       }
       event.preventDefault();

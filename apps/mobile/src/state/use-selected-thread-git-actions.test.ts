@@ -26,6 +26,7 @@ vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
   useEffect: () => {},
+  useEffectEvent: (callback: unknown) => callback,
 }));
 vi.mock("./session", () => ({
   useEnvironmentScope: (environmentId: unknown, scope: string) =>
@@ -225,8 +226,6 @@ describe("thread Git mutation permissions", () => {
 
   it("refreshes the worktree status when the metadata update is denied after checkout", async () => {
     state.scopes.add(AuthOrchestrationOperateScope);
-    // Git already switched the branch, so the sheet must show it even though the
-    // thread record could not be updated.
     state.afterGitAction = () => state.scopes.delete(AuthOrchestrationOperateScope);
     expect(
       await useSelectedThreadGitActions().onCheckoutSelectedThreadBranch("feature"),

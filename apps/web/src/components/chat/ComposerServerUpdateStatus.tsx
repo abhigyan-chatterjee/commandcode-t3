@@ -21,7 +21,6 @@ export function ComposerServerUpdateIcon({
   return <DownloadIcon aria-hidden />;
 }
 
-/** One text line, clipped at the end so the error detail never squeezes its title. */
 export function ComposerServerUpdateStatus({
   state,
   serverLabel = "server",
@@ -47,7 +46,7 @@ export function ComposerServerUpdateStatus({
             <button
               type="button"
               aria-label={`${title}: ${detail}`}
-              className="block max-w-full cursor-help truncate rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="block max-w-full cursor-help truncate rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               onClick={() => setDetailsOpen(true)}
             >
               {title}

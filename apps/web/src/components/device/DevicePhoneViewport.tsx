@@ -8,10 +8,10 @@ import type { DeviceShapeProfile } from "@t3tools/client-runtime/device/shape-pr
 import { createPhoneInteraction } from "@t3tools/client-runtime/device/phone-interaction";
 import type { DeviceScreenSize, DeviceStreamClient } from "@t3tools/client-runtime/device/stream";
 import { bindPhoneTrackpad } from "./phoneTrackpad";
+import { observeResize } from "../../lib/observeResize";
 
 const loadPhoneViewer = () => import("@t3tools/client-runtime/device/phone-viewer");
 
-/** Web shell for the framework-independent viewer. The decoded screen and input connection remain owned by DeviceStreamView. */
 export function DevicePhoneViewport(props: {
   readonly profile: DeviceShapeProfile;
   readonly model: DeviceModelSource | null;
@@ -64,8 +64,7 @@ export function DevicePhoneViewport(props: {
       const { width, height } = host.getBoundingClientRect();
       viewerRef.current?.resize(width, height, window.devicePixelRatio);
     };
-    const observer = new ResizeObserver(resize);
-    observer.observe(host);
+    const stopObserving = observeResize(host, resize);
     const blur = () => {
       interactionRef.current?.end();
       trackpad?.cancel();
@@ -113,7 +112,7 @@ export function DevicePhoneViewport(props: {
       onInputCancel(null);
       onResetReady(null);
       onFrameListener(null);
-      observer.disconnect();
+      stopObserving();
       window.removeEventListener("blur", blur);
       viewerRef.current?.dispose();
       viewerRef.current = null;

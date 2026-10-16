@@ -1,4 +1,11 @@
-import { type ReactNode, type RefObject, useLayoutEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { isElectron } from "~/env";
 import {
@@ -6,6 +13,7 @@ import {
   type PreviewPanelInlineSize,
   usePreviewPanelInlineSize,
 } from "~/hooks/usePreviewPanelInlineSize";
+import { RESIZABLE_WIDTH_PROPERTY } from "~/hooks/useResizableWidth";
 
 export { getPreviewPanelMaxWidth };
 import { cn } from "~/lib/utils";
@@ -14,24 +22,17 @@ import { RightPanelResizeHandle } from "./RightPanelResizeHandle";
 
 export type PreviewPanelMode = "inline" | "sheet" | "sidebar" | "embedded";
 
-/**
- * Shell for the preview panel. In inline mode the panel is user-resizable
- * via a drag handle on the left edge; width persists per browser. In
- * sheet/sidebar modes the parent owns the size.
- */
 interface PreviewPanelShellProps {
   mode: PreviewPanelMode;
   maximized?: boolean;
   inlineSize?: PreviewPanelInlineSize;
   open?: boolean;
   /**
-   * Overrides the localStorage key used to persist the panel width. Callers
-   * embedding this shell for a different surface (e.g. the pull requests
-   * page) should pass their own key so resizing one panel doesn't clobber
-   * the other's remembered width.
+   * Callers embedding this shell for a different surface (e.g. the pull
+   * requests page) should pass their own key so resizing one panel doesn't
+   * clobber the other's remembered width.
    */
   widthStorageKey?: string;
-  /** Overrides the initial width (px) before the user has resized the panel. */
   defaultWidth?: number;
   children: ReactNode;
 }
@@ -122,10 +123,15 @@ function PreviewPanelShellFrame(
       )}
       style={
         isInline
-          ? {
-              width: maximized ? "100%" : collapsible && !open ? "0px" : `${width}px`,
+          ? ({
+              [RESIZABLE_WIDTH_PROPERTY]: `${width}px`,
+              width: maximized
+                ? "100%"
+                : collapsible && !open
+                  ? "0px"
+                  : `var(${RESIZABLE_WIDTH_PROPERTY})`,
               transitionDuration: suppressWidthTransition ? "0ms" : undefined,
-            }
+            } as CSSProperties)
           : undefined
       }
       data-preview-panel-mode={props.mode}
@@ -135,7 +141,11 @@ function PreviewPanelShellFrame(
       <div className={cn("h-full min-h-0 w-full", collapsible && "overflow-clip")}>
         <div
           className="flex h-full min-h-0 min-w-0 flex-col"
-          style={collapsible && !maximized ? { width: `calc(${width}px - 1px)` } : undefined}
+          style={
+            collapsible && !maximized
+              ? { width: `calc(var(${RESIZABLE_WIDTH_PROPERTY}) - 1px)` }
+              : undefined
+          }
         >
           {props.children}
         </div>

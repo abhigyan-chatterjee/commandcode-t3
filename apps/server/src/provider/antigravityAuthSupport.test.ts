@@ -5,11 +5,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderInstanceId } from "@t3tools/contracts";
-import {
-  HostProcessExecutablePath,
-  HostProcessIsExecutable,
-  HostProcessPlatform,
-} from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -168,7 +164,6 @@ describe("Antigravity process environment", () => {
       auth: { type: "oauth-business" },
       gcp: { project: "proj", location: "us-central1" },
     });
-    // The agent's logout reads auth.type to clear only that method's token.
     expect(decodeJson(antigravityProfileSettings(ANTIGRAVITY_PERSONAL_AUTH))).toEqual({
       auth: { type: "oauth-personal" },
     });
@@ -259,7 +254,6 @@ describe("Antigravity process environment", () => {
         "/userdata",
         ProviderInstanceId.make("Antigravity"),
       );
-      // Existing sign-ins live at this path; it must not move.
       expect(first.profile).toBe(
         "/userdata/providers/antigravity/ac0a3dfd6dddb20962cecff6ee5fe65e19d3923be20e52c5ab52ff877f7e4c32",
       );
@@ -574,8 +568,8 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       expect(profile.browserCommand).not.toContain("/packaged/t3");
       expect(yield* fs.exists(profile.acpDirectory)).toBe(true);
     }).pipe(
-      Effect.provideService(HostProcessIsExecutable, true),
-      Effect.provideService(HostProcessExecutablePath, "/packaged/t3"),
+      Effect.provideService(HostProcess.IsExecutable, true),
+      Effect.provideService(HostProcess.ExecutablePath, "/packaged/t3"),
     ),
   );
 
@@ -596,12 +590,11 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
           detail: expect.stringContaining("Install Node.js"),
           cause: {
             _tag: "NodeRuntimeUnavailableError",
-            cause: { _tag: "CommandResolutionError" },
           },
         });
       }
       expect(yield* fs.exists(profileDirectory)).toBe(false);
-    }).pipe(Effect.provideService(HostProcessIsExecutable, true)),
+    }).pipe(Effect.provideService(HostProcess.IsExecutable, true)),
   );
 
   it.effect("preflights the no-browser helper and creates private directories only", () =>
@@ -616,7 +609,7 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       expect(profile.geminiHome).toBe(path.join(temporaryDirectory, "profile"));
       expect(yield* fs.exists(profile.acpDirectory)).toBe(true);
       expect(yield* fs.exists(profile.tokenPath)).toBe(false);
-      if ((yield* HostProcessPlatform) !== "win32") {
+      if ((yield* HostProcess.Platform) !== "win32") {
         expect((yield* fs.stat(profile.geminiHome)).mode & 0o777).toBe(0o700);
         expect((yield* fs.stat(profile.acpDirectory)).mode & 0o777).toBe(0o700);
       }
@@ -646,12 +639,10 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
         expect(yield* fs.readLink(configLink)).toBe(configSkills);
         expect(yield* fs.readLink(cliLink)).toBe(cliSkills);
         expect(yield* fs.exists(path.join(configLink, "review"))).toBe(true);
-        // Only the skill directories are shared; the rest of the profile stays private.
         expect(yield* fs.exists(path.join(profileDirectory, "config", "mcp_config.json"))).toBe(
           false,
         );
 
-        // A stale link is repointed; a real directory the user placed there is kept.
         yield* fs.remove(cliLink);
         yield* fs.symlink(path.join(temporaryDirectory, "elsewhere"), cliLink);
         yield* fs.remove(configLink);

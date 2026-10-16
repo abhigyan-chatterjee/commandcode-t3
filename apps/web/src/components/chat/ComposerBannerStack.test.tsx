@@ -36,10 +36,10 @@ it("only offers notice details when the description cannot fit", async () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      constructor(callback: () => void) {
-        resize = callback;
+      constructor(private readonly callback: (entries: { target: unknown }[]) => void) {}
+      observe(target: unknown) {
+        resize = () => this.callback([{ target }]);
       }
-      observe() {}
       disconnect() {}
     },
   );
@@ -81,7 +81,6 @@ it("only offers notice details when the description cannot fit", async () => {
   text.scrollWidth = 300;
   await act(() => resize());
   expect(details()).toHaveLength(1);
-  // It fits without the icon: the icon must not keep its own overflow alive.
   availableWidth = 308;
   await act(() => resize());
   expect(details()).toHaveLength(0);

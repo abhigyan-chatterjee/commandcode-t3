@@ -71,7 +71,12 @@ export function deriveThreadRelationshipGraph(input: {
   const addEdge = (edge: ThreadRelationshipEdge) => {
     ensureNode(edge.sourceThreadId);
     ensureNode(edge.targetThreadId);
-    edgesByKey.set(edgeKey(edge), edge);
+    edgesByKey.set(
+      edgeKey(edge),
+      edge.kind === "subagent" && edge.status === "rolled_back"
+        ? { ...edge, status: "interrupted" }
+        : edge,
+    );
   };
 
   for (const thread of threads) {
@@ -92,14 +97,13 @@ export function deriveThreadRelationshipGraph(input: {
     const ownerThreadId = input.projection.thread.id;
     for (const subagent of input.projection.subagents) {
       if (subagent.childThreadId === null) continue;
-      // The subagent record settles with the delegated task's first run, but the
-      // parent can keep sending the child follow-ups. A live run on the child
-      // thread outranks that settled status.
+      const child = threadsById.get(subagent.childThreadId);
       addEdge({
         sourceThreadId: ownerThreadId,
         targetThreadId: subagent.childThreadId,
         kind: "subagent",
-        status: threadsById.get(subagent.childThreadId)?.activityRunStatus ?? subagent.status,
+        status:
+          child?.activityRunStatus ?? (child?.latestRunId != null ? child.status : subagent.status),
       });
     }
     for (const transfer of input.projection.contextTransfers) {
@@ -181,7 +185,6 @@ export function immediateThreadRelationships(
   return rows;
 }
 
-/** True when `edge` reaches `currentThreadId` from its parent or owning agent. */
 export function isParentThreadRelationship(
   edge: ThreadRelationshipEdge,
   currentThreadId: ThreadId,
@@ -189,7 +192,6 @@ export function isParentThreadRelationship(
   return edge.kind !== "transfer" && edge.targetThreadId === currentThreadId;
 }
 
-/** An incoming parent row shows its own activity, not the child's edge status. */
 export function threadRelationshipRowStatus(
   graph: ThreadRelationshipGraph,
   row: Pick<ThreadRelationshipWalkRow, "threadId" | "edge">,
@@ -202,8 +204,6 @@ export function threadRelationshipRowStatus(
 }
 
 function threadCreatedAtMillis(node: ThreadRelationshipNode | undefined): number | null {
-  // `createdAt` is typed as a DateTime, but the value reaches here from a
-  // decoded shell that may be missing (a related thread we have no shell for).
   const createdAt: unknown = node?.thread?.createdAt;
   if (!DateTime.isDateTime(createdAt)) return null;
   const millis = DateTime.toEpochMillis(createdAt);
@@ -211,18 +211,11 @@ function threadCreatedAtMillis(node: ThreadRelationshipNode | undefined): number
 }
 
 /**
- * Orders the web thread-details Lineage rows for display.
- *
  * Web-specific by design: the panel pins the parent row first and a distinct
  * merge-back target second so their actions stay where the user expects, and
  * only then falls back to newest-created-first. Mobile does not share that
  * exception, so this is not the canonical relationship order and should not be
  * reused as one.
- *
- * Ordering below the pins is `createdAt` descending, which is immutable, so
- * rows never move when messages or status changes arrive on a related thread.
- * Threads whose shell is missing (or whose `createdAt` did not decode) sink to
- * the bottom. Ties break by thread id ascending so the order is total.
  */
 export function orderWebThreadLineageRows(input: {
   readonly graph: ThreadRelationshipGraph;

@@ -1,5 +1,5 @@
+import * as Dialog from "../components/ui/Dialog";
 import { useServerConfigs } from "./entities";
-import { Alert } from "react-native";
 import {
   questionAttachmentDraftKey,
   questionAttachmentDraftPrefix,
@@ -18,6 +18,7 @@ import { type ProviderApprovalDecision, type RuntimeRequestId } from "@t3tools/c
 import {
   type PendingThreadRequests,
   type ThreadUserInputQuestion,
+  seedUserInputDraftAnswers,
 } from "@t3tools/client-runtime/state/thread-requests";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
@@ -104,6 +105,19 @@ export function useSelectedThreadRequests() {
   const activePendingApproval = activePendingApprovals[0] ?? null;
   const activePendingUserInputs = pendingRequests?.userInputs ?? EMPTY_PENDING_REQUESTS.userInputs;
   const activePendingUserInput = activePendingUserInputs[0] ?? null;
+  useEffect(() => {
+    if (!activePendingUserInput || !selectedThreadShell) return;
+    const requestKey = scopedRequestKey(
+      selectedThreadShell.environmentId,
+      activePendingUserInput.requestId,
+    );
+    const existing = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
+    const drafts = existing[requestKey] ?? {};
+    const seeded = seedUserInputDraftAnswers(activePendingUserInput.questions, drafts);
+    if (seeded !== drafts) {
+      appAtomRegistry.set(userInputDraftsByRequestKeyAtom, { ...existing, [requestKey]: seeded });
+    }
+  }, [activePendingUserInput, selectedThreadShell]);
   const questionServerConfigs = useServerConfigs();
   const attachmentDrafts = useAtomValue(composerDraftsAtom);
   const preparationCounts = useAtomValue(questionAttachmentPreparationAtom);
@@ -280,7 +294,7 @@ export function useSelectedThreadRequests() {
             attachment.uploadEnvironmentId !== selectedThreadShell.environmentId,
         )
       ) {
-        Alert.alert(
+        Dialog.alert(
           "Attachments are not ready",
           "Wait for uploads to finish, or retry failed uploads.",
         );
@@ -322,7 +336,6 @@ export function useSelectedThreadRequests() {
     selectedThreadShell,
   ]);
 
-  // Closes an async question without messaging the agent.
   const onDismissUserInput = useCallback(async () => {
     if (
       !selectedThreadShell ||

@@ -7,9 +7,12 @@ import type {
   OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import { ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -20,6 +23,7 @@ import {
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
   dedupeShellEnrichment,
+  loadShellSnapshotParts,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
@@ -100,6 +104,47 @@ function storedThreadEvent(
 ): OrchestrationV2StoredEvent {
   return { sequence, event: { threadId, ...event } } as OrchestrationV2StoredEvent;
 }
+
+describe("loadShellSnapshotParts", () => {
+  it.effect("decodes the threads after the read transaction releases the connection", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const steps: Array<string> = [];
+      const step = <A>(name: string, value: A) =>
+        Effect.serviceOption(sql.transactionService).pipe(
+          Effect.map((transaction) => {
+            steps.push(`${name}:${Option.isSome(transaction) ? "in" : "out of"} transaction`);
+            return value;
+          }),
+        );
+      const thread = shellFixture({});
+
+      const snapshot = yield* loadShellSnapshotParts({
+        sql,
+        readThreads: step(
+          "read threads",
+          step("decode threads", {
+            schemaVersion: 1,
+            snapshotSequence: 3,
+            threads: [thread],
+            archivedThreads: [],
+          }),
+        ),
+        listProjects: step("list projects", []),
+        latestSequence: step("latest sequence", 7),
+      });
+
+      expect(steps).toEqual([
+        "read threads:in transaction",
+        "list projects:in transaction",
+        "latest sequence:in transaction",
+        "decode threads:out of transaction",
+      ]);
+      expect(snapshot.snapshotSequence).toBe(7);
+      expect(snapshot.threads.threads).toEqual([thread]);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+});
 
 function shellFixture(overrides: Partial<OrchestrationV2ThreadShell>): OrchestrationV2ThreadShell {
   return { id: "thread-a", archivedAt: null, ...overrides } as OrchestrationV2ThreadShell;
@@ -328,7 +373,6 @@ describe("composeShellStreamWithEnrichment", () => {
           snapshot: initialSnapshot,
           resolvedRepositoryIdentityRoots: ["/workspace/a"],
         });
-        // Enrichment stream is fully ready before the composed stream is pulled.
         const enrichment = Stream.make(
           shellStreamItemFromEnrichmentRefresh({
             snapshot: enrichmentSnapshot,
@@ -567,7 +611,6 @@ describe("skipUnchangedThreadShells", () => {
         updated(3, shell("a", { updatedAt: at(200), itemCount: 2, visibleItemCount: 2 })),
         updated(4, shell("a", { updatedAt: at(300), itemCount: 2, visibleItemCount: 2 })),
         updated(5, shell("b")),
-        // The resend window is 5 s.
         { advanceMs: 5_000 },
         updated(6, shell("a", { updatedAt: at(5_300), itemCount: 2, visibleItemCount: 2 })),
       ]);

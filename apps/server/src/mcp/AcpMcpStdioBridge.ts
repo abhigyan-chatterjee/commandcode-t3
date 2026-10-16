@@ -7,21 +7,11 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
+import { discardResponseBody, responsePayloads } from "@t3tools/shared/mcpResponsePayloads";
 
 /**
- * Stdio-to-HTTP bridge for T3's MCP endpoint.
- *
- * ACP agents must support stdio MCP servers, while optional http/sse support
- * is unevenly implemented. `t3 acp-mcp-bridge` runs as the stdio MCP server an
- * ACP agent spawns and forwards each JSON-RPC line to T3's authenticated
- * streamable-HTTP endpoint: single JSON responses and SSE streams are written
- * back as newline-delimited JSON-RPC, notification acknowledgements (202/204)
- * produce no output, and the `mcp-session-id` / negotiated protocol version
- * are replayed on subsequent requests.
- *
- * This entry sits on the ACP first-message critical path (bin.ts fast-paths
- * it before the CLI graph), so it imports only effect core modules; keep the
- * import list lean when changing it.
+ * ACP agents must support stdio MCP servers, while optional http/sse support is
+ * unevenly implemented.
  */
 
 export class AcpMcpBridgeError extends Error {
@@ -63,58 +53,6 @@ function protocolVersionOf(entry: unknown): string | null {
   return typeof version === "string" && version.length > 0 ? version : null;
 }
 
-async function* sseDataLines(response: Response): AsyncGenerator<string> {
-  if (response.body === null) return;
-  const decoder = new TextDecoder();
-  let buffered = "";
-  for await (const chunk of response.body) {
-    buffered += decoder.decode(chunk as Uint8Array, { stream: true });
-    let separatorIndex = buffered.search(/\n\n|\r\n\r\n/u);
-    while (separatorIndex !== -1) {
-      const rawEvent = buffered.slice(0, separatorIndex);
-      buffered = buffered.slice(separatorIndex).replace(/^(?:\r?\n){2}/u, "");
-      const data = rawEvent
-        .split(/\r?\n/u)
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice("data:".length).trimStart())
-        .join("\n");
-      if (data.length > 0) yield data;
-      separatorIndex = buffered.search(/\n\n|\r\n\r\n/u);
-    }
-  }
-}
-
-const discardResponseBody = (response: Response): Effect.Effect<void> =>
-  Effect.promise(() => response.body?.cancel().catch(() => undefined) ?? Promise.resolve());
-
-/**
- * Every JSON-RPC payload carried by a response, in arrival order: nothing for
- * notification acknowledgements, each SSE `data:` event as it streams in, or
- * the single JSON body.
- */
-export function responsePayloads(response: Response): Stream.Stream<unknown, AcpMcpBridgeError> {
-  if (response.status === 202 || response.status === 204) {
-    return Stream.unwrap(discardResponseBody(response).pipe(Effect.as(Stream.empty)));
-  }
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("text/event-stream")) {
-    return Stream.fromAsyncIterable(sseDataLines(response), bridgeError).pipe(
-      Stream.mapEffect((data) => Effect.try({ try: () => JSON.parse(data), catch: bridgeError })),
-    );
-  }
-  return Stream.unwrap(
-    Effect.tryPromise({ try: () => response.text(), catch: bridgeError }).pipe(
-      Effect.flatMap((text) =>
-        text.trim().length === 0
-          ? Effect.succeed(Stream.empty)
-          : Effect.try({ try: () => JSON.parse(text) as unknown, catch: bridgeError }).pipe(
-              Effect.map((payload) => Stream.fromIterable([payload])),
-            ),
-      ),
-    ),
-  );
-}
-
 export interface AcpMcpToolCallOptions {
   readonly endpoint: string;
   readonly authorization: string;
@@ -124,8 +62,6 @@ export interface AcpMcpToolCallOptions {
 }
 
 /**
- * Call one MCP tool through a fresh authenticated HTTP session.
- *
  * This is the terminal fallback for ACP agents that accept `mcpServers` in
  * `session/new` but fail to expose those tools to their model. Compliant ACP
  * agents continue to use the stdio bridge above.
@@ -135,8 +71,6 @@ export function callAcpMcpTool(
 ): Effect.Effect<unknown, AcpMcpBridgeError> {
   const fetchImplementation = options.fetchImplementation ?? fetch;
   return Effect.gen(function* () {
-    // The bridge is single-fibered at creation time; concurrent sends only
-    // read these after the sequential handshake, so plain locals suffice.
     let sessionId: string | null = null;
     let protocolVersion: string | null = null;
 
@@ -164,7 +98,7 @@ export function callAcpMcpTool(
             new AcpMcpBridgeError(`T3 Code MCP endpoint responded with HTTP ${response.status}.`),
           );
         }
-        const payloads = yield* Stream.runCollect(responsePayloads(response));
+        const payloads = yield* Stream.runCollect(responsePayloads(response, bridgeError));
         for (const payload of payloads) {
           protocolVersion = protocolVersionOf(payload) ?? protocolVersion;
         }
@@ -213,9 +147,6 @@ export function callAcpMcpTool(
 export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.Effect<void> {
   const fetchImplementation = options.fetchImplementation ?? fetch;
   return Effect.gen(function* () {
-    // Dispatch happens synchronously on the single stream fiber, so plain
-    // locals carry the shared session state; forwards mutate them in
-    // completion order exactly like the wire does.
     let sessionId: string | null = null;
     let protocolVersion: string | null = null;
     const running = new Set<Fiber.Fiber<void>>();
@@ -271,7 +202,7 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
           }
           return yield* discardResponseBody(response);
         }
-        yield* Stream.runForEach(responsePayloads(response), handleServerPayload);
+        yield* Stream.runForEach(responsePayloads(response, bridgeError), handleServerPayload);
       }).pipe(
         Effect.catchCause((cause) => {
           if (envelope.id === undefined) return Effect.void;
@@ -359,9 +290,8 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
 }
 
 /**
- * Argv runner for `t3 acp-mcp-bridge` and `t3 acp-mcp-call`, shared by the
- * fast-path dispatch in bin.ts and the full CLI's command handlers. Kept free
- * of heavy imports: these commands run on the ACP first-message critical path.
+ * Kept free of heavy imports: these commands run on the ACP first-message
+ * critical path.
  */
 export async function runAcpMcpCliFastPath(
   command: "acp-mcp-bridge" | "acp-mcp-call",

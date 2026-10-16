@@ -6,6 +6,7 @@ import type {
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
 } from "@t3tools/contracts";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -20,15 +21,24 @@ import {
 } from "@t3tools/shared/threadPullRequests";
 import {
   findProjectForChangeRequest,
-  findProjectOnChangeRequestHost,
   matchesLinkedPullRequestUrl,
   parseChangeRequestUrl,
+  type ChangeRequestLink,
 } from "~/lib/openPullRequestLink";
 import { useProjects, useServerConfigs } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-/** Routes link actions through the command advertised by this environment. */
+export function canLinkChangeRequest(
+  mode: ReturnType<typeof threadPullRequestLinkMode>,
+  projects: ReadonlyArray<EnvironmentProject>,
+  parsed: ChangeRequestLink,
+): boolean {
+  if (mode === "unsupported") return false;
+  if (mode === "multiple") return true;
+  return findProjectForChangeRequest(projects, parsed) !== undefined;
+}
+
 export function usePullRequestLinking(environmentId: EnvironmentId | null | undefined) {
   const configs = useServerConfigs();
   const projects = useProjects();
@@ -44,13 +54,7 @@ export function usePullRequestLinking(environmentId: EnvironmentId | null | unde
     );
     const canLink = (url: string) => {
       const parsed = parseChangeRequestUrl(url);
-      if (parsed === null || mode === "unsupported") return false;
-      return (
-        (mode === "multiple" ? findProjectOnChangeRequestHost : findProjectForChangeRequest)(
-          environmentProjects,
-          parsed,
-        ) !== undefined
-      );
+      return parsed !== null && canLinkChangeRequest(mode, environmentProjects, parsed);
     };
     const isLinked = (
       thread: {

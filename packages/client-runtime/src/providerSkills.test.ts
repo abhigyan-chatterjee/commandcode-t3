@@ -4,11 +4,11 @@ import {
   ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   dedupeProviderSkillsByName,
-  formatProviderSkillDisplayName,
   getProviderSlashCommandsForSlashMenu,
   getProviderSkillsForSlashMenu,
   hasCompleteProviderWorkspaceSnapshot,
@@ -153,7 +153,6 @@ describe("getProviderSkillsForSlashMenu", () => {
         name: "deploy",
         path: "/Users/matt/.claude/skills/deploy/SKILL.md",
         enabled: true,
-        // Reserved for the user, not the agent: still a valid pick.
         userInvocationOnly: true,
       },
     ];

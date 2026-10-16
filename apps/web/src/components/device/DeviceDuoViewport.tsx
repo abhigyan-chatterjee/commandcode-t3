@@ -6,10 +6,10 @@ import { createCanvasFrameSink } from "@t3tools/client-runtime/device/frame";
 import type { DeviceScreenSize, DeviceStreamClient } from "@t3tools/client-runtime/device/stream";
 import { createDuoPinch } from "@t3tools/client-runtime/device/duo-control";
 import { bindPhoneTrackpad } from "./phoneTrackpad";
+import { observeResize } from "../../lib/observeResize";
 
 const loadDuoViewer = () => import("@t3tools/client-runtime/device/duo-viewer");
 
-/** Web shell for the framework-independent viewer. The decoded screen and input connection remain owned by DeviceStreamView. */
 export function DeviceDuoViewport(props: {
   readonly model: DeviceModelSource;
   readonly source: RefObject<HTMLCanvasElement | null>;
@@ -64,8 +64,7 @@ export function DeviceDuoViewport(props: {
       const { width, height } = host.getBoundingClientRect();
       viewerRef.current?.resize(width, height, window.devicePixelRatio);
     };
-    const observer = new ResizeObserver(resize);
-    observer.observe(host);
+    const stopObserving = observeResize(host, resize);
     const blur = () => {
       interactionRef.current?.end();
       trackpad?.cancel();
@@ -127,7 +126,7 @@ export function DeviceDuoViewport(props: {
             (screenRef.current?.screenId === 1 ? 0 : 180),
           contains: (x, y) => !!screenRef.current && viewer.beginHinge(x, y),
           change: (angle) => {
-            viewer.setHingePreview(angle ?? previewRef.current);
+            viewer.setHingePreview(angle ?? previewRef.current, true);
             if (angle !== null) client.current?.controlDuo({ control: "angle", value: angle });
           },
         });
@@ -159,7 +158,7 @@ export function DeviceDuoViewport(props: {
       onResetReady(null);
       onFrameListener(null);
       client.current?.setDuoPanels(null);
-      observer.disconnect();
+      stopObserving();
       window.removeEventListener("blur", blur);
       viewerRef.current?.dispose();
       viewerRef.current = null;

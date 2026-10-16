@@ -68,16 +68,11 @@ vi.mock("~/state/session", async (importOriginal) => ({
   useEnvironmentScope: mocks.readEnvironmentScope,
 }));
 
-// File-preview errors share a module with asset hooks. Keep the pure URL resolver
-// without importing those hooks and their environment runtime into chrome tests.
 vi.mock("~/assets/assetUrls", async () => {
   const { resolveAssetUrl } = await import("@t3tools/client-runtime/state/assets");
   return { resolveAssetUrl };
 });
 
-// Stubbed at the direct dependency rather than letting the real module pull in
-// `useSettings` -> `state/server`, which would drag the whole settings and
-// connection graph into a test that only cares about the browser chrome.
 vi.mock("~/browser/browserDefaults", () => ({
   useBrowserDefaults: () => STUB_BROWSER_DEFAULTS,
   getBrowserDefaults: () => STUB_BROWSER_DEFAULTS,
@@ -151,10 +146,11 @@ vi.mock("~/previewStateStore", () => ({
 vi.mock("~/state/environments", () => ({
   useEnvironment: () => ({ label: "WSL" }),
   useEnvironmentHttpBaseUrl: () => "http://172.25.85.75:3773",
+  usePrimaryEnvironmentId: () => null,
 }));
 
 vi.mock("~/state/preview", () => ({
-  previewEnvironment: { open: {}, resize: {} },
+  previewEnvironment: { open: {}, close: {}, resize: {} },
 }));
 
 vi.mock("~/state/use-atom-command", () => ({
@@ -713,8 +709,6 @@ describe("PreviewView navigation", () => {
     mocks.toggleAnnotation?.();
 
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(annotation, null));
-    // A null screenshot alone looks like a comment-only pick; the flag is what
-    // separates "no crop requested" from "crop lost to a timeout".
     expect(toastManager.add).toHaveBeenCalledTimes(1);
   });
 
@@ -749,8 +743,6 @@ describe("PreviewView navigation", () => {
     );
     mocks.toggleAnnotation?.();
 
-    // The forwarded and stored annotation both drop the screenshot, so the
-    // prompt does not claim a crop that was never attached.
     const sent = { ...annotation, screenshot: null };
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(sent, null));
     expect(mocks.addPreviewAnnotation).toHaveBeenCalledWith(TEST_THREAD_REF, sent);

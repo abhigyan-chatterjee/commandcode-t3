@@ -1,3 +1,4 @@
+import { SourceControlProviderKind } from "@t3tools/contracts";
 import { assert, it, describe } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Cause from "effect/Cause";
@@ -34,7 +35,7 @@ const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 const baseLocalStatus: VcsStatusLocalResult = {
   isRepo: true,
   sourceControlProvider: {
-    kind: "github",
+    kind: SourceControlProviderKind.make("github"),
     name: "GitHub",
     baseUrl: "https://github.com",
   },
@@ -78,7 +79,6 @@ function layerTestFor(state: {
   remoteInvalidationCalls: number;
   remoteStatusRefreshUpstreamValues?: Array<boolean | undefined>;
   backgroundWorkEnabled?: boolean;
-  /** Runs before each remote status read, e.g. to hold a fetch open. */
   beforeRemoteStatus?: Effect.Effect<void>;
 }) {
   return VcsStatusBroadcaster.layer.pipe(
@@ -250,21 +250,18 @@ describe("VcsStatusBroadcaster", () => {
     return Effect.gen(function* () {
       const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
 
-      // Nobody loaded this cwd yet: no host request is spent.
       assert.isNull(yield* broadcaster.refreshPullRequestStatus("/repo"));
       assert.equal(state.remoteStatusCalls, 0);
 
       yield* broadcaster.getStatus({ cwd: "/repo" });
       assert.equal(state.remoteStatusCalls, 1);
 
-      // Loaded and no PR known: ask GitManager to retry the missing PR.
       state.currentRemoteStatus = remoteStatusWithPr;
       const refreshed = yield* broadcaster.refreshPullRequestStatus("/repo");
       assert.deepStrictEqual(refreshed, remoteStatusWithPr);
       assert.equal(state.remoteStatusCalls, 2);
       assert.equal(state.remoteInvalidationCalls, 0);
 
-      // The agent switches branches. The previous branch's PR must not block a read.
       state.currentLocalStatus = { ...baseLocalStatus, refName: "feature/next" };
       state.currentRemoteStatus = baseRemoteStatus;
       yield* broadcaster.refreshLocalStatus("/repo");
@@ -288,7 +285,6 @@ describe("VcsStatusBroadcaster", () => {
             Effect.gen(function* () {
               remoteReads += 1;
               if (remoteReads === 2) {
-                // Hold an older empty response while the turn-end refresh queues.
                 yield* Deferred.succeed(firstPollStarted, undefined);
                 yield* Deferred.await(releaseFirstPoll);
                 return baseRemoteStatus;
@@ -349,7 +345,6 @@ describe("VcsStatusBroadcaster", () => {
       const initial = yield* broadcaster.getStatus({ cwd: "/repo" }).pipe(Effect.forkScoped);
       yield* Deferred.await(firstReadStarted);
       const refresh = yield* broadcaster.refreshStatus("/repo").pipe(Effect.forkScoped);
-      // Run ready fibers before releasing the delayed first read.
       yield* TestClock.adjust(Duration.zero);
       yield* Deferred.succeed(releaseFirstRead, undefined);
       yield* Fiber.join(initial);
@@ -868,7 +863,6 @@ describe("VcsStatusBroadcaster", () => {
     }).pipe(Effect.provide(Layer.merge(layerTestFor(state), TestClock.layer())));
   });
 
-  // A push from a terminal moves ahead; a PR merged on the host moves ahead-of-default.
   it.effect.each([
     ["a push", { ...baseRemoteStatus, aheadCount: 1, aheadOfDefaultCount: 0 }],
     ["a merged pull request", { ...baseRemoteStatus, aheadOfDefaultCount: 2 }],
@@ -902,7 +896,6 @@ describe("VcsStatusBroadcaster", () => {
       ).pipe(Effect.forkIn(scope));
       yield* Deferred.await(snapshotDeferred);
 
-      // The next fetch moves the base, so the Changes totals shrink.
       const pushedLocal: VcsStatusLocalResult = {
         ...baseLocalStatus,
         branchChanges: { baseRef: "origin/main", insertions: 0, deletions: 0 },
@@ -939,7 +932,6 @@ describe("VcsStatusBroadcaster", () => {
       const refresh = yield* broadcaster.refreshStatus("/repo").pipe(Effect.forkScoped);
       yield* Deferred.await(fetchStarted);
 
-      // The fetch moves the base while it runs, so totals read before it ends would be stale.
       const fetchedLocal: VcsStatusLocalResult = {
         ...baseLocalStatus,
         branchChanges: { baseRef: "origin/main", insertions: 0, deletions: 0 },

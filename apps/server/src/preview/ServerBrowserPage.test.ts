@@ -7,6 +7,7 @@ import {
 } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 
+import { presentAsChrome } from "./ServerBrowserContexts.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 describe("server browser element refs", () => {
@@ -204,7 +205,6 @@ describe("server browser element refs", () => {
     await ServerBrowserPage.click(page, { locator: "#target", clickCount: 2 });
     await ServerBrowserPage.hover(page, { locator: "#hover" });
     expect(await page.isVisible("#menu")).toBe(true);
-    // A visible label selects the same option as its value.
     expect(await ServerBrowserPage.select(page, { locator: "#size", values: ["Large"] })).toEqual({
       selected: ["l"],
     });
@@ -244,5 +244,74 @@ describe("server browser element refs", () => {
       "move@270,140 after 2",
     ]);
     expect(await page.evaluate("window.seen")).toEqual(["click", "hover", "drop"]);
+  });
+
+  it("presents a headless page as Chrome, with client hints that agree", async () => {
+    await presentAsChrome(cdp, { platform: "linux", arch: "x64" });
+    // userAgentData exists only in secure contexts; https comes from a route.
+    let secChUa: string | undefined;
+    await page.route("https://example.test/", (route) => {
+      secChUa = route.request().headers()["sec-ch-ua"];
+      return route.fulfill({ contentType: "text/html", body: "<p>hi</p>" });
+    });
+    await page.goto("https://example.test/");
+    const identity = (await page.evaluate(`(async () => ({
+      userAgent: navigator.userAgent,
+      brands: navigator.userAgentData.brands.map((brand) => brand.brand),
+      full: (await navigator.userAgentData.getHighEntropyValues(["fullVersionList"]))
+        .fullVersionList.map((brand) => brand.brand),
+    }))()`)) as { userAgent: string; brands: string[]; full: string[] };
+    expect(identity.userAgent).not.toContain("Headless");
+    expect(identity.userAgent).toMatch(/ Chrome\/\d+\.0\.0\.0 /);
+    expect(identity.brands).toContain("Google Chrome");
+    expect([...identity.brands, ...identity.full].join()).not.toContain("Headless");
+    expect(secChUa).toContain('"Google Chrome"');
+    expect(secChUa).not.toContain("Headless");
+  });
+
+  it("stops an evaluation at its deadline so the page answers the next one", async () => {
+    await expect(
+      ServerBrowserPage.evaluate(cdp, { expression: "for (;;) {}" }, 200),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    expect(await ServerBrowserPage.evaluate(cdp, { expression: "1 + 1" }, 2_000)).toBe(2);
+  });
+});
+
+describe("server browser drag", () => {
+  it("fails the drag, not the server, when it times out while the cursor is still moving", async () => {
+    const timedOut = new Error("locator.dragTo: Timeout 30000ms exceeded.");
+    const box = { x: 0, y: 0, width: 20, height: 20 };
+    const targetBox = Promise.withResolvers<typeof box>();
+    const page = {
+      locator: (selector: string) =>
+        selector === "#card"
+          ? {
+              scrollIntoViewIfNeeded: async () => {},
+              boundingBox: async () => box,
+              dragTo: () => Promise.reject(timedOut),
+            }
+          : { boundingBox: () => targetBox.promise },
+    } as unknown as Page;
+    const unobserved: Array<unknown> = [];
+    const onUnhandled = (reason: unknown) => unobserved.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let finished = false;
+      const settled = ServerBrowserPage.drag(page, { source: "#card", target: "#lane" }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      void settled.then(() => (finished = true));
+      // Two macrotask turns: Node reports a rejection nobody observed after the first.
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+      targetBox.resolve(box);
+
+      expect(await settled).toBe(timedOut);
+      expect(unobserved).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });

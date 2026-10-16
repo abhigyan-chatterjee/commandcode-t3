@@ -1,5 +1,6 @@
 import {
   OrchestrationV2ThreadShell,
+  ThreadPullRequestLink,
   type OrchestrationProjectShell,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ShellStreamItem,
@@ -7,6 +8,39 @@ import {
 import * as Schema from "effect/Schema";
 
 const sameThreadShell = Schema.toEquivalence(OrchestrationV2ThreadShell);
+const sameLinks = Schema.toEquivalence(Schema.UndefinedOr(Schema.Array(ThreadPullRequestLink)));
+
+export function sameThreadPullRequests(
+  left: OrchestrationV2ThreadShell["pullRequests"],
+  right: OrchestrationV2ThreadShell["pullRequests"],
+): boolean {
+  return left === right || sameLinks(left, right);
+}
+
+/**
+ * Links are compared apart from the rest of the row because a deferred snapshot arrives without
+ * them; such a row keeps its links until they fill in.
+ */
+export function reuseUnchangedThreadShells(
+  previous: OrchestrationV2ShellSnapshot | null,
+  next: OrchestrationV2ShellSnapshot,
+): OrchestrationV2ShellSnapshot {
+  if (previous === null || previous.threads.length === 0) return next;
+  const previousById = new Map(previous.threads.map((thread) => [thread.id, thread] as const));
+  let reused = 0;
+  const threads = next.threads.map((thread) => {
+    const prior = previousById.get(thread.id);
+    if (prior === undefined) return thread;
+    const candidate =
+      thread.pullRequests === undefined && prior.pullRequests !== undefined
+        ? { ...thread, pullRequests: prior.pullRequests }
+        : thread;
+    if (!sameThreadShell(prior, candidate)) return thread;
+    reused += 1;
+    return prior;
+  });
+  return reused === 0 ? next : { ...next, threads };
+}
 
 function upsertById<T extends { readonly id: unknown }>(
   items: ReadonlyArray<T>,
@@ -40,17 +74,6 @@ export interface MergeShellSnapshotOptions {
   readonly resolvedRepositoryIdentityRoots: ReadonlyArray<string>;
 }
 
-/**
- * Merge an incoming full shell snapshot into prior client state.
- *
- * Authoritative snapshots (no options) replace structure and sequence even when
- * lower than cache, while retaining a prior non-null identity when the candidate
- * is still unresolved/null for the same root.
- *
- * Enrichment snapshots (options present) only patch repository identity for
- * matching current projects. They never replace projects, threads, archives,
- * or sequence, regardless of the incoming snapshot sequence.
- */
 export function mergeShellSnapshotProjects(
   previous: OrchestrationV2ShellSnapshot | null | undefined,
   next: OrchestrationV2ShellSnapshot,
@@ -96,7 +119,6 @@ export function mergeShellSnapshotProjects(
   };
 }
 
-/** Applies one committed V2 shell delta while preserving active/archive exclusivity. */
 export function applyShellStreamEvent(
   snapshot: OrchestrationV2ShellSnapshot,
   event: Exclude<
@@ -127,8 +149,6 @@ export function applyShellStreamEvent(
         snapshotSequence: event.sequence,
       };
     case "thread.updated": {
-      // An unchanged shell keeps its object and the list, so subscribers that
-      // compare by reference skip the update. Only the cursor moves.
       const existing =
         event.location === "active"
           ? snapshot.threads.find((thread) => thread.id === event.thread.id)

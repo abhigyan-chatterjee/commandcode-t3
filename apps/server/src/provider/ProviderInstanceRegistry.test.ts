@@ -1,44 +1,21 @@
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-/**
- * Multi-instance validation slices for the live `ProviderInstanceRegistry`.
- *
- * Two axes of the driver/registry refactor are exercised here:
- *
- *  1. **Same driver, many instances** — the "multi-instance codex slice"
- *     describe block below configures two independent `codex` instances and
- *     asserts each gets its own closures and identity. This is the
- *     multi-codex capability the refactor exists to unlock.
- *
- *  2. **Many drivers, one registry** — the "all drivers slice" describe
- *     block below configures one instance of every shipped driver
- *     (`codex`, `claudeAgent`, `cursor`, `grok`, `opencode`) in a single
- *     `ProviderInstanceConfigMap` and asserts the registry boots them all
- *     without cross-contamination. This proves the driver SPI is uniform
- *     across every provider — any driver plugs into the registry through
- *     the same `ProviderDriver` value contract.
- *
- * Every instance in these tests is configured with `enabled: false` so the
- * provider-status checks short-circuit to pending/disabled snapshots
- * without trying to spawn real `codex` / `claude` / `agent` / `grok` / `opencode`
- * binaries. That keeps the assertions focused on registry routing
- * behaviour rather than the runtime details of each provider.
- */
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
   type ClaudeSettings,
   type CodexSettings,
-  type CursorSettings,
-  type GrokSettings,
-  type OpenCodeSettings,
   ProviderDriverKind,
   type ProviderInstanceConfigMap,
   ProviderInstanceId,
 } from "@t3tools/contracts";
-import { HostProcessPlatform, isHostWindows } from "@t3tools/shared/hostProcess";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import type { GrokSettings } from "@t3tools/provider-grok/settings";
+import type { CursorSettings } from "@t3tools/provider-cursor/settings";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -50,20 +27,21 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ServerConfig from "../config.ts";
-import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
-import { CursorDriver, type CursorDriverEnv } from "./Drivers/CursorDriver.ts";
-import { GrokDriver, type GrokDriverEnv } from "./Drivers/GrokDriver.ts";
-import { OpenCodeDriver, type OpenCodeDriverEnv } from "./Drivers/OpenCodeDriver.ts";
+import { CursorDriver, type CursorDriverEnv } from "@t3tools/provider-cursor/server";
+import { GrokDriver, type GrokDriverEnv } from "@t3tools/provider-grok/server";
+import { OpenCodeDriver, type OpenCodeDriverEnv } from "@t3tools/provider-opencode/server";
+import type { OpenCodeSettings } from "@t3tools/provider-opencode/settings";
 import * as ModelManifest from "./ModelManifest.ts";
-import * as OpenCodeRuntime from "./opencodeRuntime.ts";
-import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
+import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
+import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
-import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
+import * as ProviderHostLive from "./ProviderHostLive.ts";
 
 const layerTestHttpClient = Layer.succeed(
   HttpClient.HttpClient,
@@ -71,6 +49,9 @@ const layerTestHttpClient = Layer.succeed(
     Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }))),
   ),
 );
+
+// The mock CLIs from makeTildeProviderFixtures are scripts Windows cannot execute.
+const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
@@ -150,7 +131,7 @@ const makeTildeProviderFixtures = Effect.fn(
 )(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const homePath = expandHomePath("~");
+  const homePath = yield* HostProcess.HomeDirectory;
   const fixtureDir = yield* fileSystem.makeTempDirectoryScoped({
     directory: homePath,
     prefix: ".t3-provider-path-test-",
@@ -195,12 +176,7 @@ const makeTildeProviderFixtures = Effect.fn(
 });
 
 describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
-  // `ServerConfig.layerTest` needs `FileSystem` to materialize its scratch
-  // directory. `Layer.merge` just unions requirements, so we have to push
-  // `NodeServices.layer` through `Layer.provideMerge` to satisfy that
-  // dependency while still surfacing NodeServices to the test body (the
-  // codex driver's `create` yields `ChildProcessSpawner` directly).
-  const layerBase = ServerConfig.layerTest(process.cwd(), {
+  const layerBaseDeps = ServerConfig.layerTest(process.cwd(), {
     prefix: "provider-instance-registry-test",
   }).pipe(
     Layer.provideMerge(NodeServices.layer),
@@ -227,9 +203,12 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         ProviderEventLoggers.NoOpProviderEventLoggers,
       ),
     ),
+    Layer.provideMerge(ProviderLatestVersions.layer),
+    Layer.provideMerge(McpProviderSessions.layer),
     Layer.provideMerge(ModelManifest.layerTest),
     Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
+  const layerBase = ProviderHostLive.layer.pipe(Layer.provideMerge(layerBaseDeps));
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
     Layer.provideMerge(layerBase),
   );
@@ -277,7 +256,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         ["Codex (personal)", "Codex (work)"].toSorted(),
       );
 
-      // Each instance must be retrievable by id and carry its *own* closures.
       const personal = yield* registry.getInstance(personalId);
       const work = yield* registry.getInstance(workId);
       expect(personal).toBeDefined();
@@ -286,13 +264,10 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       expect(personal!.textGeneration).not.toBe(work!.textGeneration);
       expect(personal!.snapshot).not.toBe(work!.snapshot);
 
-      // Snapshots identify themselves by instanceId + driver — this is
-      // what makes per-instance routing distinguishable downstream.
       const personalSnapshot = yield* personal!.snapshot.getSnapshot;
       expect(personalSnapshot.instanceId).toBe(personalId);
       expect(personalSnapshot.driver).toBe(codexDriverKind);
       expect(personalSnapshot.enabled).toBe(false);
-      // The layout resolves the configured home through the host Path.
       const path = yield* Path.Path;
       expect(personalSnapshot.continuation?.groupKey).toBe(
         `codex:home:${path.resolve("/home/julius/.codex_personal")}`,
@@ -306,7 +281,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         `codex:home:${path.resolve("/home/julius/.codex")}`,
       );
 
-      // Nothing goes to the unavailable bucket — both drivers are registered.
       const unavailable = yield* registry.listUnavailable;
       expect(unavailable).toEqual([]);
     }).pipe(Effect.provide(layerTest)),
@@ -314,8 +288,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
 
   it.live("treats an explicit in-config enabled:false as disabling despite the envelope", () =>
     Effect.gen(function* () {
-      // Old settings files can carry both flags with conflicting values.
-      // The explicit false must win so a user's disable is never undone.
       const staleId = ProviderInstanceId.make("codex_stale");
       const configMap: ProviderInstanceConfigMap = {
         [staleId]: {
@@ -340,7 +312,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
 
   it.live("reports Codex's answer when a redemption changed nothing", () =>
     Effect.gen(function* () {
-      if (yield* isHostWindows) return;
+      if (yield* HostProcess.isWindows) return;
       const fileSystem = yield* FileSystem.FileSystem;
       const fixtures = yield* makeTildeProviderFixtures();
       yield* fileSystem.writeFileString(
@@ -369,7 +341,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       });
       const codex = yield* registry.getInstance(codexId);
       expect(codex).toBeDefined();
-      // The usage read fails, so the re-probe cannot confirm new limits.
       yield* codex!.snapshot.refresh;
       expect(yield* codex!.consumeResetCredit!()).toBe("alreadyRedeemed");
     }).pipe(Effect.provide(layerTest)),
@@ -377,7 +348,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
 
   it.live("runs Codex and Claude readiness probes from configured tilde paths", () =>
     Effect.gen(function* () {
-      if (yield* isHostWindows) return;
+      if (yield* HostProcess.isWindows) return;
 
       const fixtures = yield* makeTildeProviderFixtures();
 
@@ -425,6 +396,40 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         status: "ready",
         installed: true,
         version: "2.1.219",
+      });
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.live("runs Claude instance probes in the server state dir, not the server cwd", () =>
+    Effect.gen(function* () {
+      if (yield* HostProcess.isWindows) return;
+
+      const fixtures = yield* makeTildeProviderFixtures();
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const claudeId = ProviderInstanceId.make("claude_state_dir");
+      const { registry } = yield* makeProviderInstanceRegistry<ClaudeDriverEnv>({
+        drivers: [ClaudeDriver],
+        configMap: {
+          [claudeId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+            // Packaged desktop builds start the server in $HOME, where some
+            // `claude` wrappers refuse to run.
+            environment: [{ name: "T3_CLAUDE_REQUIRED_CWD", value: stateDir, sensitive: false }],
+            config: makeClaudeConfig({
+              enabled: true,
+              binaryPath: fixtures.claudeBinaryPath,
+              homePath: fixtures.claudeHomePath,
+            }),
+          },
+        },
+      });
+      const claude = yield* registry.getInstance(claudeId);
+
+      expect(yield* claude!.snapshot.refresh).toMatchObject({
+        status: "ready",
+        version: "2.1.219",
+        auth: { status: "authenticated" },
       });
     }).pipe(Effect.provide(layerTest)),
   );
@@ -494,11 +499,11 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       return { outcome, after: yield* instance!.snapshot.getSnapshot };
     }).pipe(
       // macOS logins live in the Keychain, where resets are never read.
-      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provide(layerTest),
     );
 
-  it.live("refreshes Claude usage after redeeming a reset", () =>
+  it.live.skipIf(windowsHost)("refreshes Claude usage after redeeming a reset", () =>
     Effect.gen(function* () {
       const { outcome, after } = yield* redeemClaudeReset({
         result: "reset",
@@ -509,14 +514,16 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     }),
   );
 
-  it.live("reports Claude's answer when a claim changed nothing and the re-probe fails", () =>
-    Effect.gen(function* () {
-      const { outcome } = yield* redeemClaudeReset({
-        result: "already_used",
-        usageFailsAfterClaim: true,
-      });
-      expect(outcome).toMatchObject({ _tag: "Success", success: "alreadyRedeemed" });
-    }),
+  it.live.skipIf(windowsHost)(
+    "reports Claude's answer when a claim changed nothing and the re-probe fails",
+    () =>
+      Effect.gen(function* () {
+        const { outcome } = yield* redeemClaudeReset({
+          result: "already_used",
+          usageFailsAfterClaim: true,
+        });
+        expect(outcome).toMatchObject({ _tag: "Success", success: "alreadyRedeemed" });
+      }),
   );
 
   it.live(
@@ -561,18 +568,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
 });
 
 describe("ProviderInstanceRegistry — all drivers slice", () => {
-  // All drivers need `NodeServices` (ChildProcessSpawner + FileSystem +
-  // Path). `OpenCodeDriver.create` additionally yields `OpenCodeRuntime`
-  // at construction time, so we wire `OpenCodeRuntimeLive` into the stack.
-  // `OpenCodeRuntimeLive` bundles its own `NetService.layer` via
-  // `Layer.provide`, so the only external requirement it still exposes is
-  // `ChildProcessSpawner` — resolved here by piping it through
-  // `provideMerge(NodeServices.layer)`.
-  //
-  // The nested `provideMerge`s read bottom-up: `NodeServices.layer`
-  // provides `OpenCodeRuntimeLive`'s deps while keeping its own outputs
-  // surfaced; that merged layer then provides `ServerConfig.layerTest`'s
-  // `FileSystem` dep while keeping everything else surfaced to the test.
   const layerInfra = OpenCodeRuntime.layer.pipe(
     Layer.provide(OpenCodeServerLedger.layerTest),
     Layer.provideMerge(NodeServices.layer),
@@ -589,7 +584,7 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
       }),
     ),
   );
-  const layerBase = AntigravityInstallation.AntigravityInstallation.layer.pipe(
+  const layerBaseDeps = AntigravityInstallation.AntigravityInstallation.layer.pipe(
     Layer.provideMerge(ServerSecretStore.layer),
     Layer.provideMerge(
       ServerConfig.layerTest(process.cwd(), {
@@ -607,9 +602,12 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
         ProviderEventLoggers.NoOpProviderEventLoggers,
       ),
     ),
+    Layer.provideMerge(ProviderLatestVersions.layer),
+    Layer.provideMerge(McpProviderSessions.layer),
     Layer.provideMerge(ModelManifest.layerTest),
     Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
+  const layerBase = ProviderHostLive.layer.pipe(Layer.provideMerge(layerBaseDeps));
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
     Layer.provideMerge(layerBase),
   );
@@ -671,8 +669,6 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
         configMap,
       });
 
-      // Every configured instance must materialize — none downgraded to a
-      // shadow snapshot, because every driver in the map is registered.
       const unavailable = yield* registry.listUnavailable;
       expect(unavailable).toEqual([]);
 
@@ -682,9 +678,6 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
         [codexId, claudeId, cursorId, grokId, openCodeId].toSorted(),
       );
 
-      // Instance lookup by id resolves each instance to its own bundle —
-      // this is how rest-of-server routes turn/session calls in the new
-      // model. Each driver's bundle carries its advertised `driverKind`.
       const codex = yield* registry.getInstance(codexId);
       const claude = yield* registry.getInstance(claudeId);
       const cursor = yield* registry.getInstance(cursorId);
@@ -701,11 +694,6 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
       expect(grok?.displayName).toBe("Grok");
       expect(openCode?.displayName).toBe("OpenCode");
 
-      // Every instance owns its own set of closures — no sharing across
-      // drivers. `orchestrationAdapter` / `textGeneration` / `snapshot` are all
-      // distinct references even when two instances happen to share a
-      // trait (e.g. Cursor + others all use a stub-or-real
-      // `textGeneration`; they must still be different object values).
       const adapters = [
         codex!.orchestrationAdapter,
         claude!.orchestrationAdapter,
@@ -731,12 +719,6 @@ describe("ProviderInstanceRegistry — all drivers slice", () => {
       ];
       expect(new Set(snapshots).size).toBe(snapshots.length);
 
-      // Snapshots identify themselves by `instanceId` + `driver` so
-      // downstream aggregation in `ProviderRegistry` can tell instances
-      // apart even when two share a driver. With `enabled: false`, the
-      // check short-circuits and we get a disabled/pending snapshot back
-      // — that's enough signal to validate the stamping wrapper without
-      // spawning real binaries.
       const codexSnapshot = yield* codex!.snapshot.getSnapshot;
       expect(codexSnapshot.instanceId).toBe(codexId);
       expect(codexSnapshot.driver).toBe(codexDriverKind);

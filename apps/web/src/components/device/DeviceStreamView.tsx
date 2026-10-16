@@ -22,6 +22,7 @@ import {
   type DeviceStreamClient,
   type DeviceStreamStatus,
 } from "@t3tools/client-runtime/device/stream";
+import { observeResize } from "~/lib/observeResize";
 
 const AX_POLL_INTERVAL_MS = 2_000;
 const CONTROLS_RAIL_WIDTH = 56;
@@ -40,16 +41,9 @@ export interface DeviceViewControls {
 export interface DeviceStreamHandle {
   readonly pressButton: (button: DeviceHardwareButton) => void;
   readonly rotate: () => void;
-  /** False while the input socket is down; controls should disable. */
   readonly inputConnected: boolean;
 }
 
-/**
- * The live device screen. Pointer events map onto normalized coordinates in
- * the displayed frame and go to the device; keyboard input is forwarded while
- * the surface is focused. `visible=false` tears the stream down so a hidden
- * panel decodes nothing.
- */
 export function DeviceStreamView(props: {
   readonly environmentId: EnvironmentId;
   readonly platform: DevicePlatform;
@@ -58,10 +52,8 @@ export function DeviceStreamView(props: {
   readonly deviceDescription?: string;
   readonly visible: boolean;
   readonly hostId: string;
-  /** The full panel opts into the phone spike; compact viewers retain their flat presentation. */
   readonly allowPhoneView?: boolean;
   readonly renderControls?: (view: DeviceViewControls) => ReactNode;
-  /** Draw accessibility element frames over the screen. */
   readonly axOverlay?: boolean;
   readonly onHandle?: (handle: DeviceStreamHandle | null) => void;
   readonly onScreen?: (screen: DeviceScreenSize | null) => void;
@@ -94,6 +86,7 @@ export function DeviceStreamView(props: {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const clientRef = useRef<DeviceStreamClient | null>(null);
   const [status, setStatus] = useState<DeviceStreamStatus>("connecting");
+  const [hasFrame, setHasFrame] = useState(false);
   const [detail, setDetail] = useState<string | undefined>(undefined);
   const [showRestartNotice, setShowRestartNotice] = useState(false);
   const [screen, setScreen] = useState<DeviceScreenSize | null>(null);
@@ -123,6 +116,7 @@ export function DeviceStreamView(props: {
         onDuoUnavailable: onPhoneUnavailable,
         onStatus: (next, nextDetail) => {
           setStatus(next);
+          if (next === "streaming") setHasFrame(true);
           setDetail(nextDetail);
           if (next !== "connecting") setShowRestartNotice(false);
         },
@@ -131,7 +125,6 @@ export function DeviceStreamView(props: {
           onScreen?.(next);
         },
         onUnauthorized: () => {
-          // A fresh ticket re-runs this effect through the access dependency.
           refreshDeviceHubAccess(props.environmentId);
         },
         onMjpegFallback: (url) => {
@@ -150,6 +143,8 @@ export function DeviceStreamView(props: {
       },
     );
     clientRef.current = client;
+    setPhoneUnavailable(false);
+    setHasFrame(false);
     setMjpegUrl(null);
     setInputState({ connected: false });
     client.start();
@@ -174,7 +169,6 @@ export function DeviceStreamView(props: {
     props.visible,
   ]);
 
-  // Displayed aspect ratio (width / height) of the device as the user sees it.
   const aspect = useMemo(() => {
     if (!screen) return props.platform === "ios" ? 9 / 19.5 : 9 / 20;
     const landscape =
@@ -188,16 +182,11 @@ export function DeviceStreamView(props: {
     return w / h;
   }, [props.platform, screen]);
 
-  // Android restarts its encoder when a fold changes the framebuffer size.
-  // Keep the last decoded frame and viewer mounted while the next keyframe arrives.
-  const retainingAndroidFrame =
-    props.platform === "android" &&
-    status === "connecting" &&
-    inputState.connected &&
-    screen !== null;
+  const retainingFrame =
+    status === "connecting" && hasFrame && inputState.connected && screen !== null;
   const showPhone =
     props.allowPhoneView &&
-    (status === "streaming" || retainingAndroidFrame) &&
+    (status === "streaming" || retainingFrame) &&
     props.visible &&
     presentation === "phone" &&
     !phoneUnavailable &&
@@ -205,10 +194,10 @@ export function DeviceStreamView(props: {
     !props.axOverlay &&
     (!isDuo || screen?.supportsHingeAngle === true);
   useEffect(() => {
-    if (!retainingAndroidFrame || !showPhone) return;
+    if (!retainingFrame || !showPhone) return;
     const timeout = window.setTimeout(() => setShowRestartNotice(true), 2_000);
     return () => window.clearTimeout(timeout);
-  }, [retainingAndroidFrame, showPhone]);
+  }, [retainingFrame, showPhone]);
   const controlsInset = props.renderControls && !showPhone ? CONTROLS_RAIL_WIDTH : 0;
 
   // The frame is the largest box at `aspect` that fits the container, so a
@@ -229,9 +218,7 @@ export function DeviceStreamView(props: {
       );
     };
     update();
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
+    return observeResize(element, update);
   }, []);
   const frame = useMemo(() => {
     return fitDeviceFrame(aspect, host.width, host.height, controlsInset);
@@ -253,9 +240,6 @@ export function DeviceStreamView(props: {
     }
   }, [props.platform, screen]);
 
-  // A sideways rotation draws the raw portrait frame into a landscape box:
-  // the media element takes the transposed size and is rotated about the
-  // box's center.
   const sideways = rotation === 90 || rotation === -90;
   const mediaStyle: React.CSSProperties = sideways
     ? {
@@ -271,8 +255,6 @@ export function DeviceStreamView(props: {
         ...(rotation ? { transform: `rotate(${rotation}deg)` } : {}),
       };
 
-  // The accessibility tree is polled while the overlay is on; each poll is
-  // one JSON fetch, so there is nothing to repaint between polls.
   const [axElements, setAxElements] = useState<ReadonlyArray<DeviceAxElement>>([]);
   useEffect(() => {
     if (!props.axOverlay || !access || !props.visible) return;
@@ -285,9 +267,7 @@ export function DeviceStreamView(props: {
       try {
         const tree = await fetchDeviceAxTree(target, controller.signal);
         if (!stopped) setAxElements(tree.elements);
-      } catch {
-        // Keep the last good tree; the next poll retries.
-      }
+      } catch {}
       if (!stopped) timer = setTimeout(() => void poll(), AX_POLL_INTERVAL_MS);
     };
     void poll();
@@ -532,14 +512,14 @@ export function DeviceStreamView(props: {
             </span>
           </div>
         ) : null}
-        {retainingAndroidFrame && showPhone && showRestartNotice ? (
+        {retainingFrame && showPhone && showRestartNotice ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2">
             <span className="rounded-md bg-background/85 px-2 py-1 text-xs text-muted-foreground">
               Waiting for device video…
             </span>
           </div>
         ) : null}
-        {status !== "streaming" && !(retainingAndroidFrame && showPhone) ? (
+        {status !== "streaming" && !(retainingFrame && showPhone) ? (
           <div className="absolute inset-0">
             <DeviceLoadingView
               name={props.deviceName ?? "Device"}
@@ -556,6 +536,7 @@ export function DeviceStreamView(props: {
                     // An expired ticket surfaces as unauthorized on restart and
                     // refreshes access through the effect; no need to mint one here.
                     clientRef.current?.stop();
+                    setPhoneUnavailable(false);
                     clientRef.current?.start();
                   }}
                 >

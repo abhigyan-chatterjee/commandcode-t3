@@ -97,6 +97,12 @@ The `winget`, Homebrew, and AUR packages below belong to upstream T3 Code's dist
 winget install T3Tools.T3Code
 ```
 
+#### Windows (`scoop`)
+
+```bash
+scoop install extras/t3code
+```
+
 #### macOS (Homebrew)
 
 ```bash

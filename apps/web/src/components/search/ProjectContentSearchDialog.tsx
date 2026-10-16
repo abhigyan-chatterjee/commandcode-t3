@@ -22,10 +22,8 @@ interface ProjectContentSearchDialogProps {
 }
 
 /**
- * Result rows are syntax highlighted, so mounting all 500 possible rows at
- * once stalls the UI. Rows render in windows that grow as the sentinel at the
- * bottom of the list scrolls into view (or keyboard navigation moves past
- * the rendered window).
+ * Result rows are syntax highlighted, so mounting all 500 possible rows at once
+ * stalls the UI.
  */
 const VISIBLE_MATCH_WINDOW = 100;
 
@@ -173,7 +171,7 @@ function OpenContentSearchDialog(props: {
       escapeLabel="Back"
       footerActionLabel="Open file"
       inputAccessory={
-        <div className="absolute inset-e-2.5 top-1/2 flex shrink-0 -translate-y-1/2 items-center gap-0.5 rounded-md border bg-muted/30 p-0.5">
+        <div className="absolute inset-e-2.5 top-1/2 flex shrink-0 -translate-y-1/2 items-center gap-0.5 rounded-lg border bg-muted/30 p-0.5">
           <SearchOptionButton
             active={caseSensitive}
             disabled={!search.canReadFiles}
@@ -212,9 +210,6 @@ function OpenContentSearchDialog(props: {
             event.preventDefault();
             setSelectedIndex((current) => (current - 1 + matches.length) % matches.length);
           } else if (event.key === "Enter") {
-            // While a newer query is debouncing or in flight, the visible
-            // matches belong to the previous query; opening one would jump
-            // to a result the user did not ask for.
             if (!canOpenMatches) {
               event.preventDefault();
               return;
@@ -326,7 +321,6 @@ export function ProjectContentSearchDialog(props: ProjectContentSearchDialogProp
 
   return target ? (
     <OpenContentSearchDialog
-      // Reset the query and options whenever the workspace changes.
       key={`${target.environmentId}:${target.cwd}`}
       onOpenChange={props.onOpenChange}
       target={target}

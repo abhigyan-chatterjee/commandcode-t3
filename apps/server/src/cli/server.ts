@@ -1,4 +1,4 @@
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -26,13 +26,12 @@ const runServerCommand = (
     return yield* runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config));
   });
 
-/** Bare words can name existing directories, but must not create typo projects. */
 export const runDefaultServerCommand = (flags: CliServerFlags) =>
   Effect.gen(function* () {
     if (Option.isSome(flags.cwd)) {
       const cwd = flags.cwd.value.trim();
       const fs = yield* FileSystem.FileSystem;
-      const platform = yield* HostProcessPlatform;
+      const platform = yield* HostProcess.Platform;
       const explicitPath =
         cwd === "." ||
         cwd === ".." ||

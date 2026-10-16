@@ -1,3 +1,5 @@
+import { SessionPermissions } from "./SessionPermissions";
+import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
 import {
   ChevronRightIcon,
   ChevronsLeftRightEllipsisIcon,
@@ -23,20 +25,13 @@ import {
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
-  AuthSettingsWriteScope,
-  AuthProvidersManageScope,
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
-  AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
-  AuthPreviewOperateScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
-  AuthSourceControlWriteScope,
   AuthFilesystemReadScope,
-  AuthFilesystemWriteScope,
   AuthStandardClientScopes,
-  AuthTerminalOperateScope,
   AuthTerminalReadScope,
   type AuthClientSession,
   type AuthEnvironmentScope,
@@ -231,93 +226,6 @@ function formatAccessTimestamp(value: string): string {
   return accessTimestampFormatter.format(parsed);
 }
 
-const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
-  readonly scope: AuthGrantScope;
-  readonly title: string;
-  readonly description: string;
-}> = [
-  {
-    scope: AuthOrchestrationReadScope,
-    title: "View environment",
-    description: "Read threads, status, checkpoints, and configuration.",
-  },
-  {
-    scope: AuthOrchestrationOperateScope,
-    title: "Operate tasks",
-    description: "Start, update, and stop tasks.",
-  },
-  {
-    scope: AuthSettingsWriteScope,
-    title: "Change environment settings",
-    description: "Edit environment preferences and keybindings.",
-  },
-  {
-    scope: AuthProvidersManageScope,
-    title: "Manage providers",
-    description: "Configure, install, sign in to, and update providers and usage sources.",
-  },
-  {
-    scope: AuthEnvironmentMaintainScope,
-    title: "Maintain environment",
-    description: "Update the server and control environment processes.",
-  },
-  {
-    scope: AuthPreviewOperateScope,
-    title: "Control previews",
-    description: "Open browser previews and host browser automation.",
-  },
-  {
-    scope: AuthDiagnosticsReadScope,
-    title: "View diagnostics and usage",
-    description: "Read process diagnostics, resource history, and usage totals.",
-  },
-  {
-    scope: AuthTerminalReadScope,
-    title: "View terminals",
-    description: "Read existing terminal output and status.",
-  },
-  {
-    scope: AuthTerminalOperateScope,
-    title: "Use terminals",
-    description: "Create terminals and send input to running shells.",
-  },
-  {
-    scope: AuthSourceControlWriteScope,
-    title: "Change source control",
-    description: "Commit, push, manage branches and repositories, and change pull requests.",
-  },
-  {
-    scope: AuthFilesystemReadScope,
-    title: "Read files",
-    description: "Browse host files, search workspaces, and inspect local changes.",
-  },
-  {
-    scope: AuthFilesystemWriteScope,
-    title: "Write files",
-    description: "Edit workspace files and save plans to disk.",
-  },
-  {
-    scope: AuthAccessReadScope,
-    title: "View access",
-    description: "Inspect pairing links and authorized clients.",
-  },
-  {
-    scope: AuthAccessWriteScope,
-    title: "Manage access",
-    description: "Issue and revoke credentials for other clients.",
-  },
-  {
-    scope: AuthRelayReadScope,
-    title: "View relay",
-    description: "Inspect managed relay connectivity.",
-  },
-  {
-    scope: AuthRelayWriteScope,
-    title: "Manage relay",
-    description: "Change managed tunnel connectivity.",
-  },
-];
-
 function AccessScopeSummary({
   scopes,
   label,
@@ -505,7 +413,6 @@ function sortDesktopPairingLinks(links: ReadonlyArray<ServerPairingLinkRecord>) 
   );
 }
 
-/** Closed-header summary for the Authorized clients fold. */
 function summarizeAuthorizedClients(
   sessions: ReadonlyArray<ServerClientSessionRecord>,
   links: ReadonlyArray<ServerPairingLinkRecord>,
@@ -595,9 +502,7 @@ function endpointDefaultPreferenceKey(endpoint: AdvertisedEndpoint): string {
   let scheme = "unknown";
   try {
     scheme = new URL(endpoint.httpBaseUrl).protocol.replace(/:$/u, "");
-  } catch {
-    // Keep the stored preference stable even if a custom endpoint is malformed.
-  }
+  } catch {}
 
   return `${endpoint.provider.id}:${endpoint.reachability}:${scheme}:${endpoint.label}`;
 }
@@ -675,8 +580,6 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
   );
   const [isRevealDialogOpen, setIsRevealDialogOpen] = useState(false);
   const [isQrPanelOpen, setIsQrPanelOpen] = useState(false);
-  // Ephemeral per-row choice of which endpoint the QR encodes (AdvertisedEndpoint.id);
-  // null falls back to the saved default endpoint.
   const [qrEndpointId, setQrEndpointId] = useState<string | null>(null);
   const qrPanelId = useId();
 
@@ -730,13 +633,10 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
       : isLoopbackHostname(window.location.hostname)
         ? null
         : currentOriginPairingUrl);
-  // Value of the copy attempt that last failed. The clipboard-failure reveal
-  // dialog must show exactly what failed to copy, not the row's default URL.
   const [failedCopyValue, setFailedCopyValue] = useState<string | null>(null);
   const revealValue = failedCopyValue ?? shareablePairingUrl ?? credential ?? "";
   const isRevealValueUrl = revealValue !== credential;
   const isRevealValueHostedAppPairingUrl = isRevealValueUrl && isHostedAppPairingUrl(revealValue);
-  // Never render a QR for a loopback URL, even in the manual-copy fallback.
   const isRevealValueQrShareable =
     endpointCopyOptions.find((option) => option.url === revealValue)?.qrShareable ?? true;
   const canCopyToClipboard =
@@ -811,9 +711,6 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
     defaultEndpointKey,
   );
   const qrPairingUrl = selectedQrOption?.url ?? shareablePairingUrl;
-  // With no endpoint list the fallback is never loopback: selectPairingEndpoint
-  // skips loopback and the current-origin fallback is guarded by
-  // isLoopbackHostname, so only an explicit loopback selection hides the QR.
   const canRenderQrForSelection = selectedQrOption?.qrShareable ?? true;
   if (expiresAtMs <= nowMs) {
     return null;
@@ -962,7 +859,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                       role="radio"
                       aria-checked={isSelected}
                       className={cn(
-                        "flex w-full items-baseline gap-2 rounded-lg border px-2.5 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        "flex w-full items-baseline gap-2 rounded-lg border px-2.5 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                         isSelected
                           ? "border-foreground/60 bg-muted/30"
                           : "border-border/50 hover:bg-muted/20",
@@ -1536,11 +1433,6 @@ type SavedBackendListRowProps = {
   onAddRoute: (environment: EnvironmentPresentation) => void;
 };
 
-/**
- * Status word for a row subtitle: "Reconnecting: <reason>" instead of the
- * long-form sentence, since the row has one line and the full text is one
- * hover away.
- */
 function savedBackendStatus(environment: EnvironmentPresentation): {
   readonly text: string;
   readonly tone: "muted" | "error";
@@ -1558,7 +1450,6 @@ function savedBackendStatus(environment: EnvironmentPresentation): {
         text: connection.error ? `Reconnecting: ${connection.error}` : "Reconnecting",
         tone: "error",
       };
-    // Not a failure: the machine is fine, this build just cannot talk to it.
     case "unsupported":
       return { text: "Client not supported", tone: "muted" };
     case "error":
@@ -1573,11 +1464,6 @@ function savedBackendStatus(environment: EnvironmentPresentation): {
   }
 }
 
-/**
- * One added machine in the Environments list. The switch is the main action;
- * the update icon appears only when that machine can take an update; the
- * row menu holds the icon override, trace ID, and removal.
- */
 function SavedBackendListRow({
   environment,
   removingEnvironmentId,
@@ -1586,6 +1472,7 @@ function SavedBackendListRow({
   onAddRoute,
 }: SavedBackendListRowProps) {
   const [routesOpen, setRoutesOpen] = useState(false);
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
   const environmentId = environment.environmentId;
   const unsupported = environment.connection.phase === "unsupported";
   const enabled = environment.entry.enabled && !unsupported;
@@ -1642,11 +1529,8 @@ function SavedBackendListRow({
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
   const status = savedBackendStatus(environment);
   const serverVersion = environment.serverConfig?.environment.serverVersion ?? null;
-  // A saved T3 Connect machine this device has never reached (unsupported,
-  // or not yet connected) still has a descriptor from relay discovery, so
-  // it can wear its detected glyph instead of the generic server. Discovery
-  // empties its map on every refresh, so hold the last descriptor seen or
-  // the glyph would blink back to the generic one each time.
+  // Discovery empties its map on every refresh, so hold the last descriptor
+  // seen or the glyph would blink back to the generic one each time.
   const relayDiscovery = useRelayEnvironmentDiscovery();
   const discoveredDescriptor = Option.getOrNull(
     relayDiscovery.environments.get(environmentId)?.status ?? Option.none(),
@@ -1655,7 +1539,6 @@ function SavedBackendListRow({
   if (discoveredDescriptor !== undefined && discoveredDescriptor !== lastDescriptor) {
     setLastDescriptor(discoveredDescriptor);
   }
-  // Held for the same reason as the descriptor, so Copy MCP URL survives a refresh.
   const discoveredRelayHttpBaseUrl =
     relayDiscovery.environments.get(environmentId)?.environment.endpoint.httpBaseUrl;
   const [lastRelayHttpBaseUrl, setLastRelayHttpBaseUrl] = useState(discoveredRelayHttpBaseUrl);
@@ -1665,29 +1548,26 @@ function SavedBackendListRow({
   ) {
     setLastRelayHttpBaseUrl(discoveredRelayHttpBaseUrl);
   }
+  const prepared = usePreparedConnection(environmentId);
+  const connectedTarget = isConnected && prepared._tag === "Some" ? prepared.value.target : null;
   const mcpUrl = environmentMcpUrl({
     entry: environment.entry,
     relayHttpBaseUrl: discoveredRelayHttpBaseUrl ?? lastRelayHttpBaseUrl,
+    connectedTarget,
   });
   const machineKind = resolveEnvironmentMachineKind(
     environment.serverConfig ??
       (lastDescriptor === undefined ? null : { environment: lastDescriptor }),
   );
-  const prepared = usePreparedConnection(environmentId);
   const routeCount = connectionRoutes(environment.entry).length;
   const subtitleText = [
-    environmentTransportLabel(
-      environment,
-      isConnected && prepared._tag === "Some" ? prepared.value.target : null,
-    ),
+    environmentTransportLabel(environment, connectedTarget),
     resumingServerUpdate ? "Restarting" : status.text,
     enabled && versionMismatch ? serverVersion : null,
   ]
     .filter((value): value is string => value !== null)
     .join(" · ");
 
-  // Only a connected, enabled machine can take a remote update; a switched-off
-  // one keeps the version note so the icon is not a surprise later.
   const showUpdateAction =
     enabled &&
     isConnected &&
@@ -1743,7 +1623,7 @@ function SavedBackendListRow({
             type="button"
             aria-expanded={routesOpen}
             onClick={() => setRoutesOpen((open) => !open)}
-            className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
             {routeCount === 1 ? "Routes" : `${routeCount} routes`}
             <ChevronRightIcon
@@ -1751,6 +1631,25 @@ function SavedBackendListRow({
               className={cn(
                 "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
                 routesOpen && "rotate-90",
+              )}
+            />
+          </button>
+          <span aria-hidden className="shrink-0">
+            ·
+          </span>
+          <button
+            type="button"
+            aria-expanded={permissionsOpen}
+            aria-controls={`remote-permissions-${environmentId}`}
+            onClick={() => setPermissionsOpen((open) => !open)}
+            className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+          >
+            Permissions
+            <ChevronRightIcon
+              aria-hidden
+              className={cn(
+                "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
+                permissionsOpen && "rotate-90",
               )}
             />
           </button>
@@ -1764,12 +1663,26 @@ function SavedBackendListRow({
         ) : null
       }
       detail={
-        routesOpen ? (
-          <EnvironmentRoutesList
-            environment={environment}
-            onAddRoute={() => onAddRoute(environment)}
-          />
-        ) : null
+        <>
+          {routesOpen && (
+            <EnvironmentRoutesList
+              environment={environment}
+              onAddRoute={() => onAddRoute(environment)}
+            />
+          )}
+          {permissionsOpen && (
+            <div
+              id={`remote-permissions-${environmentId}`}
+              className="mt-2 border-t border-border/50"
+            >
+              <SessionPermissions
+                environmentId={environmentId}
+                connected={isConnected}
+                routeContext
+              />
+            </div>
+          )}
+        </>
       }
     >
       {unsupported &&
@@ -1887,7 +1800,9 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
   const {
     isSignedIn,
     linkState: primaryCloudLinkState,
+    linkRevoked,
     managedTunnelActive,
+    managedTunnelOutOfSync,
     publishAgentActivity,
     holdWebhooksWhileOffline,
     operationError,
@@ -1912,8 +1827,6 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
     setIsUpdating(true);
     const ok = await reconcileCloudState({ managedTunnel: enabled, publish: publishAgentActivity });
     if (ok) {
-      // Turning the tunnel off while publishing stays on downgrades the link
-      // rather than removing it — say so instead of claiming an unlink.
       toastManager.add({
         type: "success",
         title: enabled
@@ -1976,9 +1889,13 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
         <SettingsRow
           title={searchableSetting("t3-connect").title}
           description={
-            managedTunnelActive
-              ? "This environment is available to your other devices through T3 Connect."
-              : "Make this environment available to your other devices through T3 Connect."
+            linkRevoked
+              ? "This environment was removed from T3 Connect. Turn it on to link it again."
+              : managedTunnelActive
+                ? "This environment is available to your other devices through T3 Connect."
+                : managedTunnelOutOfSync
+                  ? "T3 Connect is out of sync. This environment is linked only to publish agent activity, so other devices cannot connect. Turn T3 Connect on to repair it."
+                  : "Make this environment available to your other devices through T3 Connect."
           }
           status={operationError ?? primaryCloudLinkState.error}
           control={
@@ -1995,6 +1912,11 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
               onCheckedChange={(enabled) => void updateManagedTunnel(enabled)}
             />
           }
+        />
+      ) : linkRevoked ? (
+        <SettingsRow
+          title={searchableSetting("t3-connect").title}
+          description="This environment was removed from T3 Connect. Run `t3 connect link` on the host to link it again."
         />
       ) : null}
       <SettingsRow
@@ -2113,8 +2035,6 @@ export function ConnectionsSettings() {
     ? (primarySessionState.data.permissions ?? primarySessionState.data.scopes ?? null)
     : null;
   const currentAuthPolicy = desktopBridge ? null : (primarySessionState.data?.auth.policy ?? null);
-  // Catalog order is the order the machines were added; rows never jump when
-  // one is switched off.
   const savedEnvironments = useMemo(
     () =>
       environments.filter(
@@ -2122,8 +2042,6 @@ export function ConnectionsSettings() {
       ),
     [environments],
   );
-  // The WSL backend is managed from the WSL row under this machine, so it has
-  // no row of its own in the list.
   const listedEnvironments = useMemo(
     () =>
       savedEnvironments.filter(
@@ -2131,9 +2049,6 @@ export function ConnectionsSettings() {
       ),
     [savedEnvironments],
   );
-  // Machines "Update all" can reach: switched on, connected, behind the client
-  // version, remotely updatable, and not already mid-update. The button only
-  // renders when this list is non-empty.
   const savedServerUpdateStatesAtom = useMemo(
     () =>
       Atom.make((get) =>
@@ -2157,7 +2072,6 @@ export function ConnectionsSettings() {
           !environment.entry.enabled ||
           environment.connection.phase !== "connected" ||
           isDesktopLocalConnectionTarget(environment.entry.target) ||
-          // Manual-update machines only offer a copy command on their row.
           selfUpdate === null ||
           (selfUpdate === "desktop-managed" && !desktopAppUpdate)
         ) {
@@ -2179,10 +2093,6 @@ export function ConnectionsSettings() {
       }),
     [savedServerUpdateStates],
   );
-  // Switched-off machines never receive threads, so they stay out of the
-  // load balancing and GitHub sharing lists. The WSL backend has no row in
-  // the Environments list but does take threads, so it stays in here. This
-  // machine leads the list.
   const loadBalancingEnvironments = useMemo(
     () => [
       ...(primaryEnvironment ? [primaryEnvironment] : []),
@@ -2213,7 +2123,6 @@ export function ConnectionsSettings() {
   const [desktopAccessManagementMutationError, setDesktopAccessManagementMutationError] = useState<
     string | null
   >(null);
-  // Only this client's creation response can supply a shareable credential.
   const [createdPairingCredentials, setCreatedPairingCredentials] = useState<
     ReadonlyMap<string, string>
   >(() => new Map());
@@ -2228,7 +2137,6 @@ export function ConnectionsSettings() {
   >(null);
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
   const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
-  // Set when the dialog adds a route to a saved machine instead of a new one.
   const [routeTarget, setRouteTarget] = useState<EnvironmentPresentation | null>(null);
   const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "ssh">("remote");
   const [savedBackendHost, setSavedBackendHost] = useState("");
@@ -2237,7 +2145,6 @@ export function ConnectionsSettings() {
   const [savedBackendSshUsername, setSavedBackendSshUsername] = useState("");
   const [savedBackendSshPort, setSavedBackendSshPort] = useState("");
   const [sshHostSuggestionsOpen, setSshHostSuggestionsOpen] = useState(false);
-  // Tracks the arrow-key/hover highlight so Enter selects it instead of submitting the typed text.
   const highlightedSshHostRef = useRef<DesktopDiscoveredSshHost | undefined>(undefined);
   const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
@@ -2248,24 +2155,9 @@ export function ConnectionsSettings() {
   const [isUpdatingTailscaleServe, setIsUpdatingTailscaleServe] = useState(false);
   const [isUpdatingWslBackend, setIsUpdatingWslBackend] = useState(false);
   const [desktopWslMutationError, setDesktopWslMutationError] = useState<string | null>(null);
-  // Pending WSL setting change waiting on user confirmation. Set when
-  // the user tries a destructive change (disable, switch distro,
-  // toggle wsl-only) while the WSL backend has saved-env state on this
-  // machine. Confirming applies the change; cancelling drops it
-  // without touching the persisted setting. Null when nothing is
-  // pending.
   type PendingWslChange =
-    // wasWslOnly is true when the user picked Off while wsl-only mode
-    // was active. In that case "disable" also clears wsl-only and
-    // relaunches onto the Windows backend, because leaving wsl-only on
-    // with wslBackendEnabled off is a meaningless state (wsl-only is
-    // only honoured when the WSL backend is enabled).
     | { readonly kind: "disable"; readonly wasWslOnly: boolean }
     | { readonly kind: "distro"; readonly nextDistro: string | null }
-    // Asked at enable time so the user picks the mode upfront instead
-    // of being dropped into "both backends" and having to discover the
-    // wsl-only switch separately. Resolved through enable-mode action
-    // buttons on the dialog rather than a single Confirm.
     | { readonly kind: "enable"; readonly nextDistro: string | null }
     | { readonly kind: "wsl-only"; readonly nextValue: boolean };
   const [pendingWslChange, setPendingWslChange] = useState<PendingWslChange | null>(null);
@@ -2602,7 +2494,6 @@ export function ConnectionsSettings() {
     }
   }, [primaryEnvironmentId]);
 
-  // Shared by manual SSH submission and discovered-host selection.
   const connectSavedBackendSshTarget = useCallback(
     async (target: DesktopSshEnvironmentTarget) => {
       setIsAddingSavedBackend(true);
@@ -2742,7 +2633,6 @@ export function ConnectionsSettings() {
     [handleAddSavedBackend, savedBackendSshHost],
   );
 
-  // Resolves a picked alias before connecting it through the manual SSH flow.
   const handleSelectSshHostSuggestion = useCallback(
     async (target: DesktopDiscoveredSshHost) => {
       if (isAddingSavedBackend || !desktopBridge) return;
@@ -2769,7 +2659,6 @@ export function ConnectionsSettings() {
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.nativeEvent.isComposing || event.keyCode === 229) return;
 
-      // The popup only renders when there is content, so an "open" flag alone is not enough.
       const isSshHostPopupVisible = sshHostSuggestionsOpen && hasSshHostSuggestionContent;
       if (isSshHostPopupVisible) {
         const command = resolveShortcutCommand(event, keybindings, {
@@ -2793,7 +2682,6 @@ export function ConnectionsSettings() {
         }
       }
 
-      // A highlighted row means Enter belongs to the autocomplete, which selects it.
       const hasHighlightedSshHost =
         isSshHostPopupVisible && highlightedSshHostRef.current !== undefined;
       if (
@@ -2863,8 +2751,6 @@ export function ConnectionsSettings() {
     [removeEnvironment],
   );
 
-  // Removing forgets the pairing, credentials, and cached threads on this
-  // device. Switching off is the reversible path, so removal always confirms.
   // T3 Connect environments get their own dialog: removing one here leaves its
   // account registration, so it points to where that can be deregistered.
   const [pendingT3ConnectRemoval, setPendingT3ConnectRemoval] =
@@ -2875,7 +2761,6 @@ export function ConnectionsSettings() {
         setPendingT3ConnectRemoval(environment);
         return;
       }
-      // Fail closed: no mounted confirm host means no removal.
       const confirmed = await requestConfirmDialog(
         `Remove ${environment.label} from this device?\nThis forgets its pairing, credentials, and cached threads here. Switch it off instead to keep it saved.`,
         { variant: "destructive" },
@@ -3010,8 +2895,6 @@ export function ConnectionsSettings() {
       </div>
     </div>
   );
-  // T3 Connect is offered as a route when this account can reach the machine
-  // through it and it is not one of the machine's routes yet.
   const relayRouteOffer =
     routeTarget !== null &&
     !routeTarget.relayManaged &&
@@ -3225,12 +3108,6 @@ export function ConnectionsSettings() {
           );
         })
       : null;
-  // Apply a setting change immediately. The orchestrator reconciles the
-  // pool in the background and the primary backend is untouched, so we
-  // don't gate this behind a confirmation dialog. After the desktop
-  // side persists the change and nudges its orchestrator, we trigger
-  // the renderer's reconciler so the WSL backend's saved-env-shaped
-  // entry catches up (registers/unregisters) without a reload.
   const applyWslSettingChange = useCallback(
     async (apply: () => Promise<DesktopWslState>) => {
       if (
@@ -3244,10 +3121,6 @@ export function ConnectionsSettings() {
       try {
         await apply();
         refreshDesktopWslState();
-        // The connection platform source polls the desktop bootstrap list and
-        // reconciles the environment catalog automatically, so toggling the WSL
-        // backend on/off or switching distros is picked up here without an
-        // explicit renderer reconcile.
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to update WSL backend.";
         setDesktopWslMutationError(message);
@@ -3266,29 +3139,17 @@ export function ConnectionsSettings() {
     [desktopBridge, primaryEnvironmentId],
   );
 
-  // Reload the keep-alive WSL state atom. Clearing the mutation error before
-  // refresh lets the atom-owned load error become the visible retry state.
   const loadWslState = useCallback(() => {
     setDesktopWslMutationError(null);
     refreshDesktopWslState();
   }, []);
 
-  // True when a desktop-local WSL backend is currently registered as an
-  // environment on this machine. We use this as a proxy for "the user has work
-  // that lives on the WSL side": if WSL has connected in a way that registered
-  // the env, disabling or switching distros could disrupt open threads/projects.
-  // If WSL never connected (fresh install, toggled on then immediately off,
-  // etc.) there's no local environment, so we skip the confirmation dialog.
   const hasWslRegistrationToLose = useMemo(() => {
     return environments.some((environment) =>
       isDesktopLocalConnectionTarget(environment.entry.target),
     );
   }, [environments]);
 
-  // Single picker for "WSL backend off" vs "running on distro X". The
-  // dropdown maps "Off" to disable and any distro entry to enable +
-  // run on that distro. Splitting these into a separate switch and
-  // dropdown was confusing — they're the same decision.
   const handleSelectWslMode = useCallback(
     (value: string) => {
       if (!desktopBridge || !desktopWslState) return;
@@ -3301,9 +3162,6 @@ export function ConnectionsSettings() {
         // still clear that state instead of silently no-op'ing.
         if (!desktopWslState.enabled && !desktopWslState.wslOnly) return;
         const wasWslOnly = desktopWslState.wslOnly;
-        // Confirm when there's WSL state to lose, OR when wsl-only is
-        // on (turning the only running backend off needs to switch
-        // back to Windows and restart — always consequential).
         if (hasWslRegistrationToLose || wasWslOnly) {
           setPendingWslChange({ kind: "disable", wasWslOnly });
           return;
@@ -3314,21 +3172,11 @@ export function ConnectionsSettings() {
       const nextDistro = value === BACKEND_VALUE_DEFAULT_WSL ? null : value;
       const resolvedNext = nextDistro ?? defaultDistroName;
       if (!desktopWslState.enabled) {
-        // Was off, user picked a distro: ask whether to run both
-        // backends or only WSL. We always ask here so the user picks
-        // the mode upfront instead of having to discover the wsl-only
-        // switch afterwards.
         setPendingWslChange({ kind: "enable", nextDistro });
         return;
       }
-      // Already enabled — treat as a distro switch. Skip the change if
-      // the user re-picked the row that's already selected.
       const resolvedCurrent = desktopWslState.distro ?? defaultDistroName;
       if (resolvedCurrent === resolvedNext) return;
-      // Confirm when there's WSL registration to lose, OR in wsl-only mode:
-      // there the primary IS the WSL backend, so a distro change relaunches
-      // the app (the IPC handler does this) rather than swapping a secondary,
-      // and the user should see that coming.
       if (hasWslRegistrationToLose || desktopWslState.wslOnly) {
         setPendingWslChange({ kind: "distro", nextDistro });
         return;
@@ -3338,7 +3186,6 @@ export function ConnectionsSettings() {
     [applyWslSettingChange, desktopBridge, desktopWslState, hasWslRegistrationToLose],
   );
 
-  // Dispatched from the enable modal's two action buttons.
   const handleConfirmEnableWsl = useCallback(
     (mode: "both" | "wsl-only") => {
       if (!desktopBridge || !pendingWslChange || pendingWslChange.kind !== "enable") return;
@@ -3360,12 +3207,6 @@ export function ConnectionsSettings() {
   const handleToggleWslOnly = useCallback(
     (enabled: boolean) => {
       if (!desktopBridge || !desktopWslState || desktopWslState.wslOnly === enabled) return;
-      // wsl-only changes which backend the pool uses as "primary",
-      // which is decided once at app launch. The desktop side persists
-      // the setting immediately but doesn't tear down or restart
-      // anything itself; the renderer warns the user to expect a
-      // restart and (in a follow-up) can trigger it automatically.
-      // Always prompt — even enabling is consequential here.
       setPendingWslChange({ kind: "wsl-only", nextValue: enabled });
     },
     [desktopBridge, desktopWslState],
@@ -3374,15 +3215,12 @@ export function ConnectionsSettings() {
   const handleConfirmWslChange = useCallback(() => {
     if (!desktopBridge || !pendingWslChange) return;
     const change = pendingWslChange;
-    // The enable kind resolves through handleConfirmEnableWsl, not
-    // this single Confirm path.
     if (change.kind === "enable") return;
     setPendingWslChange(null);
     if (change.kind === "disable") {
       void applyWslSettingChange(async () => {
         const next = await desktopBridge.setWslBackendEnabled(false);
         if (change.wasWslOnly) {
-          // Clearing wsl-only relaunches onto the Windows backend.
           return await desktopBridge.setWslOnly(false);
         }
         return next;
@@ -3398,11 +3236,6 @@ export function ConnectionsSettings() {
 
   const renderWslRow = () => {
     if (!desktopWslState) {
-      // A load failed: keep a recovery row (with retry) visible instead of
-      // silently hiding the section. The error persists across an in-flight
-      // retry so the row doesn't flicker away, and the button reflects the
-      // loading state. With no error we simply haven't loaded yet (or WSL
-      // management isn't available), so render nothing.
       if (
         isWslSettingsRowVisible({ state: null, error: desktopWslError }) &&
         canManageLocalBackend
@@ -3427,13 +3260,6 @@ export function ConnectionsSettings() {
       }
       return null;
     }
-    // WSL went unavailable while the user still has the WSL backend persisted
-    // (it may have been uninstalled or its distro removed). The desktop side
-    // falls back to the Windows backend, but the normal distro picker needs a
-    // live distro list it no longer has. Without a control here the user would
-    // be stranded on a WSL preference they can't clear, so render a recovery
-    // row that switches back to Windows. When WSL is unavailable AND unused,
-    // there's nothing to recover — keep the section hidden as before.
     if (!isWslSettingsRowVisible({ state: desktopWslState, error: desktopWslError })) {
       return null;
     }
@@ -3460,10 +3286,6 @@ export function ConnectionsSettings() {
         />
       );
     }
-    // Distro is null when the user wants the WSL default. Map it to the
-    // real default's name so the Select highlights a real option; fall
-    // back to the sentinel only when no distros are listed yet (the
-    // dropdown then renders a single placeholder that matches).
     const defaultDistroName =
       desktopWslState.distros.find((distro) => distro.isDefault)?.name ?? null;
     const selectValue = !desktopWslState.enabled
@@ -3774,6 +3596,21 @@ export function ConnectionsSettings() {
                   <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
                 ) : null}
               </>
+            ) : null}
+            {primaryEnvironment ? (
+              <details className="group px-3 sm:px-4">
+                <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-md text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                  Permissions
+                  <ChevronRightIcon
+                    aria-hidden
+                    className="size-3 text-muted-foreground group-open:rotate-90"
+                  />
+                </summary>
+                <SessionPermissions
+                  environmentId={primaryEnvironment.environmentId}
+                  connected={primaryEnvironment.connection.phase === "connected"}
+                />
+              </details>
             ) : null}
           </SettingsSection>
 
@@ -4095,6 +3932,7 @@ export function ConnectionsSettings() {
             title="No environment selected"
             description="Connect an environment to view its settings and access."
           />
+          <LocalEnvironmentSetting />
           {canReadRelay || canManageRelay ? (
             <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
           ) : null}
@@ -4104,7 +3942,7 @@ export function ConnectionsSettings() {
   );
 
   return (
-    <SettingsPageContainer width="wide">
+    <SettingsPageContainer>
       {primarySettings}
       <SettingsSection
         {...searchableSetting("remote-environments")}

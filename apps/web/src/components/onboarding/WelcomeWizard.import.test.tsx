@@ -64,7 +64,7 @@ vi.mock("../../state/environments", () => {
     environmentId,
     label: environmentId,
     connection: { phase: "connected" },
-    entry: { target: { _tag: "DirectConnectionTarget" } },
+    entry: { enabled: true, target: { _tag: "DirectConnectionTarget" } },
   });
   const primary = environment("primary");
   return {
@@ -132,7 +132,9 @@ vi.mock("../settings/CodexSetupSection", () => ({
   CodexSetupSection: () => null,
   AddManagedCodexAccountDialog: () => null,
 }));
-vi.mock("../settings/providerDriverMeta", () => ({ getDriverOption: () => ({ label: "Agent" }) }));
+vi.mock("../settings/providerDriverMeta", () => ({
+  providerClients: { get: () => ({ label: "Agent" }) },
+}));
 vi.mock("../settings/providerStatus", () => ({
   getProviderSummary: () => ({ headline: "Checking", detail: null }),
 }));
@@ -227,7 +229,7 @@ async function mountImport(remote = false) {
   });
   await click("Continue");
   await click("Continue");
-  expect(text(renderer!.root)).toContain("Choose your projects");
+  expect(text(renderer!.root)).toContain("Import your projects");
 }
 
 beforeEach(() => {

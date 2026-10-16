@@ -17,9 +17,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as NodeUtil from "node:util";
 
 import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
@@ -30,14 +33,20 @@ import {
   makeTargetedProviderUpdateAction,
   resolveLatestProviderVersion,
   type ProviderMaintenanceCommandAction,
-  ProviderVersionCache,
-} from "./providerMaintenance.ts";
-import type { ProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
-import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
+} from "@t3tools/provider-core/server/maintenanceResolver";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import type { ProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
+import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 
 const UPDATE_TIMEOUT_MS = 5 * 60_000;
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
+// Every progress publish resends the provider list to each client, so the
+// installer's output is sampled rather than forwarded line by line.
+const UPDATE_PROGRESS_INTERVAL = Duration.seconds(1);
+const UPDATE_PROGRESS_MAX_LENGTH = 200;
+// An installer may write for minutes without a line ending; only its tail matters.
+const UPDATE_PARTIAL_LINE_MAX_LENGTH = 4_096;
 
 export interface ProviderMaintenanceCommandResult {
   readonly stdout: string;
@@ -83,14 +92,13 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
     readonly command: string;
     readonly args: ReadonlyArray<string>;
     readonly env?: NodeJS.ProcessEnv;
+    readonly onProgress?: (line: string) => Effect.Effect<void>;
   }) {
     const collectCommandResult = Effect.fn("ProviderMaintenanceRunner.collectCommandResult")(
       function* () {
-        // Resolve the executable for the host platform before spawning. On
-        // Windows the update tools are batch shims (e.g. `npm` -> `npm.cmd`),
-        // which a bare ChildProcess.spawn cannot launch (spawn npm ENOENT);
-        // resolveSpawnCommand finds the real `.cmd` and routes it through the
-        // shell. On Linux/macOS (incl. the WSL backend) this is a no-op.
+        // On Windows the update tools are batch shims (e.g. `npm` -> `npm.cmd`), which a bare
+        // ChildProcess.spawn cannot launch (spawn npm ENOENT); resolveSpawnCommand finds the
+        // real `.cmd` and routes it through the shell.
         const resolved = yield* resolveSpawnCommand(input.command, input.args);
         const child = yield* input.spawner
           .spawn(
@@ -110,14 +118,41 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
           );
         yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
 
+        const pendingProgress = yield* Ref.make<string | null>(null);
+        const onProgress = input.onProgress;
+        if (onProgress) {
+          yield* Ref.getAndSet(pendingProgress, null).pipe(
+            Effect.flatMap((line) => (line === null ? Effect.void : onProgress(line))),
+            Effect.repeat(Schedule.spaced(UPDATE_PROGRESS_INTERVAL)),
+            Effect.forkScoped,
+          );
+        }
+        const trackProgress = <E>(stream: Stream.Stream<Uint8Array, E>) => {
+          if (!onProgress) {
+            return stream;
+          }
+          const decoder = new TextDecoder();
+          let partialLine = "";
+          return stream.pipe(
+            Stream.tap((chunk) => {
+              const split = splitOutputLines(partialLine, decoder.decode(chunk, { stream: true }));
+              partialLine = split.partialLine;
+              const line =
+                toProgressLine(split.partialLine) ??
+                split.lines.map(toProgressLine).findLast((value) => value !== null);
+              return line ? Ref.set(pendingProgress, line) : Effect.void;
+            }),
+          );
+        };
+
         const [stdout, stderr, exitCode] = yield* Effect.all(
           [
             collectUint8StreamText({
-              stream: child.stdout,
+              stream: trackProgress(child.stdout),
               maxBytes: UPDATE_OUTPUT_MAX_BYTES,
             }),
             collectUint8StreamText({
-              stream: child.stderr,
+              stream: trackProgress(child.stderr),
               maxBytes: UPDATE_OUTPUT_MAX_BYTES,
             }),
             child.exitCode,
@@ -164,6 +199,29 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
     );
   },
 );
+
+export function splitOutputLines(
+  partialLine: string,
+  text: string,
+): { readonly lines: ReadonlyArray<string>; readonly partialLine: string } {
+  const parts = (partialLine + text).split(/\r\n|\r|\n/);
+  return { partialLine: (parts.pop() ?? "").slice(-UPDATE_PARTIAL_LINE_MAX_LENGTH), lines: parts };
+}
+
+export function toProgressLine(line: string): string | null {
+  const text = NodeUtil.stripVTControlCharacters(line).replace(/\s+/g, " ").trim();
+  if (text.length === 0) {
+    return null;
+  }
+  return text.length <= UPDATE_PROGRESS_MAX_LENGTH
+    ? text
+    : `${text.slice(0, UPDATE_PROGRESS_MAX_LENGTH - 1)}…`;
+}
+
+function describeCommand(command: ProviderMaintenanceCommandAction): string {
+  const executable = command.executable.split(/[\\/]/).pop() || command.executable;
+  return [executable, ...command.args].join(" ");
+}
 
 function trimNullable(value: string): string | null {
   const trimmed = value.trim();
@@ -222,12 +280,16 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
   const manifestService = yield* ModelManifest.ModelManifest;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
-  const versionCache = yield* ProviderVersionCache;
-  const runMaintenanceCommand = (update: ProviderMaintenanceCommandAction) =>
+  const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
+  const runMaintenanceCommand = (
+    update: ProviderMaintenanceCommandAction,
+    onProgress: (line: string) => Effect.Effect<void>,
+  ) =>
     runProviderMaintenanceCommandWithSpawner({
       spawner,
       command: update.executable,
       args: update.args,
+      onProgress,
       ...(update.env ? { env: update.env } : {}),
     });
   const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
@@ -283,7 +345,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               maintenanceCapabilities,
             ).pipe(
               Effect.provideService(HttpClient.HttpClient, httpClient),
-              Effect.provideService(ProviderVersionCache, versionCache),
+              Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
             ),
           {
             concurrency: "unbounded",
@@ -355,14 +417,16 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
           function* () {
             const startedAt = yield* nowIso;
             yield* Ref.set(startedAtRef, startedAt);
-            yield* setUpdateState(
-              makeUpdateState({
-                status: "running",
-                startedAt,
-                finishedAt: null,
-                message: "Updating provider.",
-              }),
-            );
+            const setRunningMessage = (message: string) =>
+              setUpdateState(
+                makeUpdateState({
+                  status: "running",
+                  startedAt,
+                  finishedAt: null,
+                  message,
+                }),
+              ).pipe(Effect.asVoid);
+            yield* setRunningMessage("Checking for the latest version");
 
             // The cached capabilities chose the lock; re-derive ownership
             // now so the command that runs matches the executable as it is
@@ -388,7 +452,10 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               targetVersion ??
               (yield* resolveLatestProviderVersion(fresh).pipe(
                 Effect.provideService(HttpClient.HttpClient, httpClient),
-                Effect.provideService(ProviderVersionCache, versionCache),
+                Effect.provideService(
+                  ProviderLatestVersions.ProviderLatestVersions,
+                  latestVersions,
+                ),
               ));
             const advisory =
               resolveProviderCompatibility(manifest.compatibility, provider, candidateVersion) ??
@@ -420,7 +487,8 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                 }),
               );
             }
-            const result = yield* runMaintenanceCommand(command);
+            yield* setRunningMessage(`Running ${describeCommand(command)}`);
+            const result = yield* runMaintenanceCommand(command, setRunningMessage);
             const finishedAt = yield* nowIso;
             if (result.timedOut || result.exitCode !== 0) {
               return yield* finish(
@@ -434,6 +502,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               );
             }
 
+            yield* setRunningMessage("Verifying the installed version");
             // Homebrew's "latest" moves once the upgrade lands; read it again.
             const verified = yield* providerRegistry.getProviderMaintenanceCapabilitiesForInstance(
               instanceId,
@@ -445,10 +514,8 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               verified,
               instanceId,
             );
-            // "Succeeded" needs the provider to still be installed: an
-            // installer that exits 0 and leaves the binary missing is not a
-            // success. A missing version alone is not held against it, since
-            // Cursor's `about` probe can fail transiently on a healthy binary.
+            // A missing version alone is not held against it, since Cursor's `about` probe can
+            // fail transiently on a healthy binary.
             const couldNotVerify =
               verifiedProviders.length === 0 ||
               verifiedProviders.some(

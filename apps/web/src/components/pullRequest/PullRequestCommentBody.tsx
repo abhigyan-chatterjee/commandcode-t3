@@ -3,8 +3,8 @@ import { useEffect, useId, useRef, useState, type ComponentProps } from "react";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { observeResize } from "~/lib/observeResize";
 
-/** Keep the complete markdown intact while limiting long reports to a readable preview. */
 export function PullRequestCommentBody({
   className,
   ...props
@@ -19,9 +19,7 @@ export function PullRequestCommentBody({
     if (!element) return;
     const measure = () => setOverflowing(element.getBoundingClientRect().height > 240);
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
+    return observeResize(element, measure);
   }, []);
 
   return (

@@ -1,8 +1,8 @@
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
 import { environmentSession } from "../../state/session";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { SymbolView } from "../../components/AppSymbol";
-import { MaterialScreenContent } from "../../components/MaterialScreenContent";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { ScreenContent } from "../../components/ui/ScreenContent";
 import { useCallback, useMemo, useState, type ComponentProps } from "react";
 import { Platform, Pressable, View, type NativeSyntheticEvent } from "react-native";
 import {
@@ -13,8 +13,8 @@ import {
   SearchBar,
 } from "react-native-screens";
 
-import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
-import { MaterialFilesHeader } from "./MaterialFilesHeader";
+import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
+import { FilesHeader } from "./FilesHeader";
 import { nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useEnvironmentQuery } from "../../state/query";
@@ -78,7 +78,6 @@ export function ThreadFileNavigatorPane(props: {
           sharesBackground: false,
           tintColor: foregroundColor,
           type: "button" as const,
-          width: 44,
         },
       ] as ComponentProps<typeof ScreenStackHeaderConfig>["headerRightBarButtonItems"],
     [foregroundColor, toggleAuxiliaryPane],
@@ -88,7 +87,7 @@ export function ThreadFileNavigatorPane(props: {
     <FileTreeBrowser
       key={JSON.stringify([props.environmentId, props.cwd])}
       entries={entriesQuery.entries}
-      loadedDirectories={entriesQuery.loadedDirectories}
+      loadingDirectories={entriesQuery.loadingDirectories}
       onLoadDirectory={entriesQuery.loadDirectory}
       error={
         canReadFiles
@@ -98,6 +97,7 @@ export function ThreadFileNavigatorPane(props: {
             : (fileAccess.error ?? "This connection cannot read host files.")
       }
       isPending={fileAccess.isPending || entriesQuery.isPending}
+      isRefreshing={entriesQuery.isRefreshing}
       searchQuery={searchQuery}
       searchTruncated={entriesQuery.searchTruncated}
       selectedPath={props.selectedPath}
@@ -172,7 +172,7 @@ export function ThreadFileNavigatorPane(props: {
         style={{ paddingTop: Platform.OS === "android" ? 0 : props.headerInset }}
       >
         {Platform.OS === "android" ? (
-          <MaterialFilesHeader
+          <FilesHeader
             projectName={props.projectName}
             searchQuery={searchQuery}
             onSearchQueryChange={setSearchQuery}
@@ -223,7 +223,7 @@ export function ThreadFileNavigatorPane(props: {
           </View>
         ) : null}
       </View>
-      <MaterialScreenContent insetHorizontal>{fileTree}</MaterialScreenContent>
+      <ScreenContent insetHorizontal>{fileTree}</ScreenContent>
     </View>
   );
 }

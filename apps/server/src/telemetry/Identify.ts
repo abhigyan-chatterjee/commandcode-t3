@@ -1,4 +1,3 @@
-import * as NodeOS from "node:os";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -8,8 +7,9 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
-import { writeFileStringAtomically } from "../atomicWrite.ts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as ServerConfig from "../config.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 /**
  * Codex writes `tokens` only for ChatGPT logins and omits the key for API-key,
@@ -231,7 +231,7 @@ const upsertAnonymousId = Effect.gen(function* () {
   }
 
   const anonymousId = yield* Crypto.Crypto.pipe(
-    Effect.flatMap((crypto) => crypto.randomUUIDv4),
+    Effect.flatMap((crypto) => crypto.randomUUIDv4()),
     Effect.mapError(
       (cause) =>
         new TelemetryAnonymousIdGenerationError({
@@ -255,15 +255,6 @@ const upsertAnonymousId = Effect.gen(function* () {
   return anonymousId;
 });
 
-/**
- * getTelemetryIdentifier - Users are "identified" by finding the first match of the following, then hashing the value.
- * 1. ~/.codex/auth.json tokens.account_id
- * 2. ~/.claude.json userID
- * 3. ~/.t3/telemetry/anonymous-id
- *
- * A missing file or an API-key-only Codex auth.json falls through quietly. Only
- * unreadable or malformed files warn.
- */
 export const getTelemetryIdentifierForHome = Effect.fn("getTelemetryIdentifierForHome")(
   function* (homeDirectory: string) {
     const codexAccountId = yield* getCodexAccountId(homeDirectory).pipe(
@@ -311,6 +302,7 @@ export const getTelemetryIdentifierForHome = Effect.fn("getTelemetryIdentifierFo
   Effect.orElseSucceed(() => null),
 );
 
-export const getTelemetryIdentifier = Effect.suspend(() =>
-  getTelemetryIdentifierForHome(NodeOS.homedir()),
+export const getTelemetryIdentifier = Effect.flatMap(
+  HostProcess.HomeDirectory,
+  getTelemetryIdentifierForHome,
 );

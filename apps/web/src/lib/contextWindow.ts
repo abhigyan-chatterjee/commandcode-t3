@@ -1,4 +1,5 @@
 import type {
+  OrchestrationV2ProviderTurn,
   OrchestrationV2ProviderTurnTokenUsage,
   OrchestrationV2ProviderThread,
   OrchestrationV2TurnItem,
@@ -23,7 +24,22 @@ export type ContextWindowSnapshot = NullableContextWindowUsage & {
   readonly updatedAt: string;
 };
 
-/** Prefers the provider's live usage report (#8144); falls back to the last compaction item. */
+/** Newest usage report across a thread's provider turns. Snapshots order turns
+    by provider thread, not time, so pick by timestamp. */
+export function latestProviderTurnTokenUsage(
+  turns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "tokenUsage">>,
+): OrchestrationV2ProviderTurnTokenUsage | null {
+  let latest: OrchestrationV2ProviderTurnTokenUsage | null = null;
+  for (const { tokenUsage } of turns) {
+    if (tokenUsage === undefined) continue;
+    // Ties go to the later entry, since live upserts append.
+    if (latest === null || Date.parse(tokenUsage.updatedAt) >= Date.parse(latest.updatedAt)) {
+      latest = tokenUsage;
+    }
+  }
+  return latest;
+}
+
 export function deriveLatestContextWindowSnapshot(
   entries: ReadonlyArray<{
     readonly item: OrchestrationV2TurnItem;
@@ -154,7 +170,7 @@ export function formatContextWindowTokens(value: number | null): string {
   if (value < 10_000) {
     return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   }
-  if (value < 1_000_000) {
+  if (value < 999_500) {
     return `${Math.round(value / 1_000)}k`;
   }
   return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;

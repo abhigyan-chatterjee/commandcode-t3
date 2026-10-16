@@ -73,8 +73,12 @@ export class SessionControl {
     });
   }
 
+  agentMayAct(agentId: string) {
+    return this.agentId === null || this.agentId === agentId;
+  }
+
   agent<A>(agentId: string, run: () => Promise<A>) {
-    if (this.agentId !== agentId)
+    if (!this.agentMayAct(agentId))
       return Promise.reject(
         new BrowserControlInterrupted("This tab belongs to another agent.", "agentMismatch"),
       );
@@ -82,13 +86,22 @@ export class SessionControl {
       return Promise.reject(
         new BrowserControlInterrupted("A human controls this tab.", "humanControl"),
       );
-    return this.action(() => this.agentId === agentId && this.owner === null, run);
+    return this.action(() => this.agentMayAct(agentId) && this.owner === null, run);
+  }
+
+  agentCanActNow(agentId: string) {
+    return this.agentMayAct(agentId) && this.owner === null;
   }
 
   /**
-   * Work any client may ask for, such as a viewport or appearance change. It
-   * waits its turn behind running actions but needs no control.
+   * A read that needs no control and does not queue, so an agent can look at
+   * a page while a human drives it without holding up the human's input.
    */
+  observe<A>(run: () => Promise<A>) {
+    this.assertOpen();
+    return run();
+  }
+
   system<A>(run: () => Promise<A>) {
     this.assertOpen();
     return this.enqueue(async () => {

@@ -5,13 +5,12 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { HostProcessEnvironment, HostProcessPlatform } from "./hostProcess.ts";
+import * as HostProcess from "./HostProcess.ts";
 import * as Context from "effect/Context";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 const WINDOWS_PATH_DELIMITER = ";";
@@ -43,42 +42,19 @@ export type CommandAvailabilityChecker = (
   options?: CommandAvailabilityOptions,
 ) => Effect.Effect<boolean, never, FileSystem.FileSystem | Path.Path>;
 
-export class CommandResolutionError extends Data.TaggedError("CommandResolutionError")<{
-  readonly command: string;
-  readonly reason: "not-found";
-}> {}
-
 const WINDOWS_SHELL_META_CHARS = /([()\][%!^"`<>&|;, *?])/g;
 
 /**
- * Escapes a single argument for `cmd.exe` shell mode (`spawn(..., { shell: true })`
- * on Windows). Node joins the command and arguments with spaces and hands the
- * resulting string to `cmd.exe` without any quoting, so every dynamic argument
- * must be escaped to survive both cmd.exe parsing and the target program's
- * `CommandLineToArgvW` parsing. Mirrors cross-spawn's argument escaping.
+ * Node hands the command string to `cmd.exe /d /s /c "<command>"` without any
+ * quoting, so every dynamic argument must be escaped to survive both cmd.exe
+ * parsing and the target program's `CommandLineToArgvW` parsing.
  */
 function escapeWindowsShellArg(arg: string): string {
-  // Double up backslashes that precede a double quote, then escape the quote
-  // itself so it survives CommandLineToArgvW.
   let escaped = arg.replace(/(\\*)"/g, '$1$1\\"');
   // Double up trailing backslashes so the closing quote is not escaped away.
   escaped = escaped.replace(/(\\*)$/, "$1$1");
-  // Quote the whole argument so embedded whitespace is preserved.
   escaped = `"${escaped}"`;
-  // Escape cmd.exe metacharacters so cmd passes them through verbatim.
   return escaped.replace(WINDOWS_SHELL_META_CHARS, "^$1");
-}
-
-/**
- * Escapes arguments for shell-mode spawns: applies {@link escapeWindowsShellArg}
- * when the platform is `win32` (where `shell: true` routes through `cmd.exe`)
- * and returns the arguments untouched everywhere else.
- */
-function sanitizeShellModeArgsForPlatform(
-  args: ReadonlyArray<string>,
-  platform: NodeJS.Platform,
-): Array<string> {
-  return platform === "win32" ? args.map(escapeWindowsShellArg) : [...args];
 }
 
 export interface ResolvedSpawnCommand {
@@ -176,13 +152,6 @@ export function listLoginShellCandidates(
   }
 
   return candidates;
-}
-
-export function readPathFromLoginShell(
-  shell: string,
-  execFile: ExecFileSyncLike = NodeChildProcess.execFileSync,
-): string | undefined {
-  return readEnvironmentFromLoginShell(shell, ["PATH"], execFile).PATH;
 }
 
 export function readPathFromLaunchctl(
@@ -483,17 +452,10 @@ function resolveCommandCandidates(
   return Array.from(new Set(candidates));
 }
 
-// Session bootstrap resolves the same commands over and over, each PATH scan
-// costing hundreds of 'shell.isExecutableFile' filesystem probes (tens of
-// thousands per connect). Memoize the scan outcome per
-// (platform, PATH, PATHEXT, command) for a short window: repeat scans hit the
-// cache while any change to the search environment invalidates immediately.
 // Explicit-path resolution is never cached - callers probe paths they have
 // just written (e.g. managed binary installs). A "not-found" outcome is also
 // cached for the TTL, so a just-installed binary can stay invisible for up to
 // 30s unless resolved by explicit path.
-// TTL expiry uses the monotonic clock (Clock.monotonicTimeNanos) so backward
-// wall-clock adjustments cannot keep expired entries alive.
 const COMMAND_RESOLUTION_CACHE_TTL_NANOS = 30_000_000_000n;
 const COMMAND_RESOLUTION_CACHE_MAX_ENTRIES = 512;
 const COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR = String.fromCharCode(0);
@@ -503,9 +465,6 @@ interface CommandResolutionCacheEntry {
   readonly expiresAtNanos: bigint;
 }
 
-// The cache lives in the Effect environment (like HostProcessPlatform above)
-// so tests and embedders can provide an isolated instance; the default is a
-// single process-wide map shared by all consumers.
 export const CommandResolutionCache = Context.Reference<Map<string, CommandResolutionCacheEntry>>(
   "@t3tools/shared/shell/CommandResolutionCache",
   {
@@ -518,7 +477,6 @@ interface PathDirectoryListing {
   readonly names: ReadonlySet<string> | undefined;
 }
 
-// mtime of a PATH directory; null when missing, undefined when unreadable.
 const directoryMtime = (directory: string) =>
   FileSystem.FileSystem.use((fileSystem) => fileSystem.stat(directory)).pipe(
     Effect.map((info) =>
@@ -544,11 +502,6 @@ const PathDirectoryListings = Context.Reference<
   Cache.Cache<string, PathDirectoryListing, never, FileSystem.FileSystem> | undefined
 >("@t3tools/shared/shell/PathDirectoryListings", { defaultValue: () => undefined });
 
-/**
- * Run a batch of command lookups (e.g. editor discovery) that lists each PATH
- * directory once, relisting it if its mtime changes, and probes only listed
- * names instead of every PATH x PATHEXT candidate per command.
- */
 export const withPathDirectoryListings = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const listings = yield* Cache.make({
@@ -589,7 +542,6 @@ function cacheCommandResolution(
   });
 }
 
-// Trace each command lookup, not every candidate file it probes.
 const isExecutableFile = Effect.fnUntraced(function* (
   filePath: string,
   platform: NodeJS.Platform,
@@ -612,7 +564,7 @@ const isExecutableFile = Effect.fnUntraced(function* (
 const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlatform")(function* (
   command: string,
   options: CommandAvailabilityOptions & { readonly platform: NodeJS.Platform },
-): Effect.fn.Return<string, CommandResolutionError, FileSystem.FileSystem | Path.Path> {
+): Effect.fn.Return<string | null, never, FileSystem.FileSystem | Path.Path> {
   const path = yield* Path.Path;
   const platform = options.platform;
   const env = options.env ?? process.env;
@@ -630,12 +582,12 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
         return candidate;
       }
     }
-    return yield* new CommandResolutionError({ command, reason: "not-found" });
+    return null;
   }
 
   const pathValue = resolvePathEnvironmentVariable(env);
   if (pathValue.length === 0) {
-    return yield* new CommandResolutionError({ command, reason: "not-found" });
+    return null;
   }
 
   const cacheKey = [platform, pathValue, windowsPathExtensions.join(";"), command].join(
@@ -645,9 +597,6 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
   const nowNanos = yield* Clock.monotonicTimeNanos;
   const cached = cache.get(cacheKey);
   if (cached !== undefined && cached.expiresAtNanos > nowNanos) {
-    if (cached.resolvedPath === null) {
-      return yield* new CommandResolutionError({ command, reason: "not-found" });
-    }
     return cached.resolvedPath;
   }
 
@@ -670,7 +619,6 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
       listing = yield* Cache.get(listings, pathEntry);
     }
     for (const candidate of commandCandidates) {
-      // The stat below still checks exact case and rejects non-files.
       if (listing?.names && !listing.names.has(candidate.toLowerCase())) continue;
       const candidatePath = path.join(pathEntry, candidate);
       if (yield* isExecutableFile(candidatePath, platform, windowsPathExtensions)) {
@@ -680,7 +628,7 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
     }
   }
   cacheCommandResolution(cache, cacheKey, null, nowNanos);
-  return yield* new CommandResolutionError({ command, reason: "not-found" });
+  return null;
 });
 
 export const resolveCommandPath = Effect.fn("shell.resolveCommandPath")(function* (
@@ -688,23 +636,60 @@ export const resolveCommandPath = Effect.fn("shell.resolveCommandPath")(function
   options: CommandAvailabilityOptions = {},
 ) {
   return yield* resolveCommandPathForPlatform(command, {
-    env: options.env ?? (yield* HostProcessEnvironment),
-    platform: yield* HostProcessPlatform,
+    env: options.env ?? (yield* HostProcess.Environment),
+    platform: yield* HostProcess.Platform,
   });
 });
 
-// Untraced because it runs before most spawns and returns at once off Windows.
+// Git for Windows 2.56 moved x64 builds from mingw64 to ucrt64; ARM64 builds
+// live in clangarm64 and 32-bit ones in mingw32.
+const GIT_FOR_WINDOWS_BUILDS = ["ucrt64", "clangarm64", "mingw64", "mingw32"] as const;
+
+function isFileSync(filePath: string): boolean {
+  try {
+    return NodeFS.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The launcher costs a second process on every git command, and each launch
+ * leaks a kernel token reference that slows process creation machine-wide until
+ * reboot. The real binary sets HOME itself, but adds its own folders to PATH
+ * for hooks, ssh and credential helpers only when MSYSTEM is unset, so the
+ * launcher stays when MSYSTEM is set.
+ */
+export function preferGitForWindowsBinary(
+  executable: string,
+  env: NodeJS.ProcessEnv,
+  isFile: (filePath: string) => boolean = isFileSync,
+): string {
+  if (env.MSYSTEM) return executable;
+  const path = NodePath.win32;
+  if (path.basename(executable).toLowerCase() !== "git.exe") return executable;
+  const launcherDirectory = path.dirname(executable);
+  const launcherFolder = path.basename(launcherDirectory).toLowerCase();
+  if (launcherFolder !== "cmd" && launcherFolder !== "bin") return executable;
+  const installRoot = path.dirname(launcherDirectory);
+  for (const build of GIT_FOR_WINDOWS_BUILDS) {
+    const candidate = path.join(installRoot, build, "bin", "git.exe");
+    if (isFile(candidate)) return candidate;
+  }
+  return executable;
+}
+
 export const resolveSpawnCommand = Effect.fnUntraced(function* (
   command: string,
   args: ReadonlyArray<string>,
   options: CommandAvailabilityOptions = {},
 ): Effect.fn.Return<ResolvedSpawnCommand> {
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   if (platform !== "win32") {
     return { command, args: [...args], shell: false };
   }
 
-  const hostEnvironment = yield* HostProcessEnvironment;
+  const hostEnvironment = yield* HostProcess.Environment;
   const env =
     options.env === undefined
       ? hostEnvironment
@@ -724,6 +709,7 @@ export const resolveSpawnCommand = Effect.fnUntraced(function* (
     platform,
     resolvePathEnvironmentVariable(env),
     resolveWindowsPathExtensions(env).join(";"),
+    env.MSYSTEM ? "msystem" : "",
     command,
   ].join(COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR);
   const nowNanos = yield* Clock.currentTimeNanos;
@@ -732,7 +718,8 @@ export const resolveSpawnCommand = Effect.fnUntraced(function* (
   if (cached !== undefined && cached.expiresAtNanos > nowNanos) {
     resolvedExecutable = cached.resolvedPath;
   } else {
-    resolvedExecutable = resolveExecutable(command, platform, env) ?? null;
+    const found = resolveExecutable(command, platform, env);
+    resolvedExecutable = found === undefined ? null : preferGitForWindowsBinary(found, env);
     if (!explicitPath && resolvedExecutable !== null) {
       cacheCommandResolution(cache, cacheKey, resolvedExecutable, nowNanos);
     }
@@ -743,9 +730,12 @@ export const resolveSpawnCommand = Effect.fnUntraced(function* (
     return { command: resolvedCommand, args: [...args], shell: false };
   }
 
+  // Node runs a shell spawn as `cmd.exe /d /s /c "<command> <args...>"`, but
+  // passing args with `shell: true` prints DEP0190. Build the same escaped line
+  // here and pass no args.
   return {
-    command: escapeWindowsShellArg(resolvedCommand),
-    args: sanitizeShellModeArgsForPlatform(args, platform),
+    command: [resolvedCommand, ...args].map(escapeWindowsShellArg).join(" "),
+    args: [],
     shell: true,
   };
 });
@@ -754,10 +744,7 @@ export const isCommandAvailable = Effect.fn("shell.isCommandAvailable")(function
   command: string,
   options: CommandAvailabilityOptions = {},
 ) {
-  return yield* resolveCommandPath(command, options).pipe(
-    Effect.as(true),
-    Effect.catchTags({ CommandResolutionError: () => Effect.succeed(false) }),
-  );
+  return (yield* resolveCommandPath(command, options)) !== null;
 });
 
 export function resolveKnownWindowsCliDirs(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
@@ -787,13 +774,26 @@ function readWindowsEnvironmentSafely(
   }
 }
 
+/** Keep one PATH spelling in copied Windows environment records. */
+export function setWindowsPath(env: NodeJS.ProcessEnv, value: string): void {
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "PATH") {
+      delete env[key];
+    }
+  }
+  env.PATH = value;
+}
+
 function mergeWindowsEnv(
   currentEnv: NodeJS.ProcessEnv,
   patch: Partial<Record<string, string>>,
 ): NodeJS.ProcessEnv {
   const nextEnv: NodeJS.ProcessEnv = { ...currentEnv };
   for (const [key, value] of Object.entries(patch)) {
-    if (value !== undefined) {
+    if (value === undefined) continue;
+    if (key === "PATH") {
+      setWindowsPath(nextEnv, value);
+    } else {
       nextEnv[key] = value;
     }
   }
@@ -811,8 +811,6 @@ export const resolveWindowsEnvironment = Effect.fn("shell.resolveWindowsEnvironm
   }).PATH;
   const mergedPath = mergePathValues(shellPath, inheritedPath, "win32");
   const knownCliPath = resolveKnownWindowsCliDirs(env).join(WINDOWS_PATH_DELIMITER);
-  // Preserve the order a user's shell uses. These directories fill gaps when
-  // desktop apps launch without the full interactive-shell PATH.
   const baselinePath = mergePathValues(mergedPath, knownCliPath, "win32");
   const baselinePatch: Partial<NodeJS.ProcessEnv> = baselinePath ? { PATH: baselinePath } : {};
   const baselineEnv = mergeWindowsEnv(env, baselinePatch);

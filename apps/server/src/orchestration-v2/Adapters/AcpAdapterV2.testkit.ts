@@ -10,12 +10,12 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/process";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 
-import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
-import type { ProviderReplayGate } from "../testkit/ProviderReplayGate.testkit.ts";
-import { ACP_PROTOCOL, type AcpAdapterV2RuntimeInput } from "./AcpAdapterV2.ts";
+import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import type { ProviderReplayGate } from "@t3tools/provider-testing/replayGate";
+import { ACP_PROTOCOL, type AcpAdapterV2RuntimeInput } from "@t3tools/provider-acp/server/adapter";
 
 export const AcpReplayTranscript = Schema.Struct({
   provider: ProviderDriverKind,
@@ -153,12 +153,6 @@ function acpReplayAgentArgs(scriptPath: string): ReadonlyArray<string> {
   return ["--experimental-strip-types", scriptPath];
 }
 
-/**
- * Holds the replay agent's inbound lines at a gate the scenario releases.
- * The agent writes one line per `emit_inbound` entry in transcript order, so
- * the Nth line it writes belongs to the Nth inbound entry and carries its
- * label. Lines after a held one wait with it, which keeps wire order.
- */
 function holdGatedReplayLines(
   transcript: AcpReplayTranscript,
   replayGate: ProviderReplayGate,

@@ -23,15 +23,10 @@ import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import {
-  ProviderAdapterSteerRunError,
-  type ProviderAdapterV2Event,
-  type ProviderAdapterV2Shape,
-  type ProviderAdapterV2TurnInput,
-} from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
-import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
+import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
@@ -67,8 +62,8 @@ it.effect.each(
   Effect.scoped(
     Effect.gen(function* () {
       const cwd = yield* checkpointWorkspace(`steering-completion-${timing.replaceAll(" ", "-")}`);
-      const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
-      const started: ProviderAdapterV2TurnInput[] = [];
+      const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+      const started: ProviderAdapter.ProviderAdapterV2TurnInput[] = [];
       const steerEntered = yield* Deferred.make<void>();
       const rejectSteer = yield* Deferred.make<void>();
       let steerCalls = 0;
@@ -80,7 +75,7 @@ it.effect.each(
           activeSteeringInterruptsTools: timing === "with interrupting native steering",
         },
       };
-      const adapter: ProviderAdapterV2Shape = {
+      const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
         instanceId,
         driver,
         getCapabilities: () => Effect.succeed(capabilities),
@@ -153,7 +148,7 @@ it.effect.each(
                   if (timing === "after delivery") return;
                   yield* Deferred.succeed(steerEntered, undefined);
                   yield* Deferred.await(rejectSteer);
-                  return yield* new ProviderAdapterSteerRunError({
+                  return yield* new ProviderAdapter.ProviderAdapterSteerRunError({
                     driver,
                     providerThreadId: turn.providerThread.id,
                     providerTurnId: turn.providerTurnId,
@@ -410,8 +405,6 @@ it.effect.each(
   ),
 );
 
-// Claude and Pi steer live but cannot interrupt-and-restart, so a changed
-// selection waits for the next turn as the thread's saved selection.
 const runSelection = {
   instanceId,
   model: "test-model",
@@ -422,20 +415,23 @@ const composerSelection = {
   options: [...runSelection.options, { id: "fastMode", value: false }],
 };
 
-const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function* (name: string) {
+const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function* (
+  name: string,
+  canRestart = false,
+) {
   const cwd = yield* checkpointWorkspace(name);
-  const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
-  const started: ProviderAdapterV2TurnInput[] = [];
+  const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+  const started: ProviderAdapter.ProviderAdapterV2TurnInput[] = [];
   const steered: string[] = [];
   const capabilities = {
     ...CodexProviderCapabilitiesV2,
     turns: {
       ...CodexProviderCapabilitiesV2.turns,
       supportsActiveSteering: true,
-      supportsSteeringByInterruptRestart: false,
+      supportsSteeringByInterruptRestart: canRestart,
     },
   };
-  const adapter: ProviderAdapterV2Shape = {
+  const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
     instanceId,
     driver,
     getCapabilities: () => Effect.succeed(capabilities),
@@ -519,7 +515,6 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
     ProviderAdapterRegistry.layerSingle(adapter),
     { runEffectWorker: false },
   );
-  // Creates the thread and starts its first turn on `runSelection`.
   const startFirstTurn = Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
@@ -565,79 +560,79 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   return { events, started, steered, layer, startFirstTurn };
 });
 
-it.effect("steers a changed turn-scoped selection into a provider that cannot restart", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
-        "steering-selection-change",
-      );
-      yield* Effect.gen(function* () {
-        const orchestrator = yield* Orchestrator.OrchestratorV2;
-        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-        const threadId = yield* startFirstTurn;
-        const steer = (id: string, selection: ModelSelection) =>
-          orchestrator
-            .dispatch({
-              type: "message.dispatch",
-              commandId: CommandId.make(id),
-              threadId,
-              messageId: MessageId.make(`message:${id}`),
-              text: id,
-              attachments: [],
-              modelSelection: selection,
-              dispatchMode: { type: "steer_active", targetRunId: started[0]!.runId },
-              createdBy: "user",
-              creationSource: "web",
-            })
-            .pipe(Effect.andThen(worker.drain()));
+it.effect.each([{ canRestart: false }, { canRestart: true }])(
+  "steers a changed turn-scoped selection into the running turn (canRestart=$canRestart)",
+  ({ canRestart }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+          `steering-selection-change-${canRestart}`,
+          canRestart,
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* startFirstTurn;
+          const steer = (id: string, selection: ModelSelection) =>
+            orchestrator
+              .dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make(id),
+                threadId,
+                messageId: MessageId.make(`message:${id}`),
+                text: id,
+                attachments: [],
+                modelSelection: selection,
+                dispatchMode: { type: "steer_active", targetRunId: started[0]!.runId },
+                createdBy: "user",
+                creationSource: "web",
+              })
+              .pipe(Effect.andThen(worker.drain()));
 
-        yield* steer("steer-changed", composerSelection);
-        const changed = yield* orchestrator.getThreadProjection(threadId);
-        assert.deepEqual(steered, ["steer-changed"]);
-        assert.equal(started.length, 1);
-        assert.lengthOf(changed.attempts, 1);
-        assert.equal(changed.runs[0]?.status, "running");
-        assert.deepEqual(changed.runs[0]?.modelSelection, runSelection);
-        assert.deepEqual(changed.thread.modelSelection, composerSelection);
+          yield* steer("steer-changed", composerSelection);
+          const changed = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(steered, ["steer-changed"]);
+          assert.equal(started.length, 1);
+          assert.lengthOf(changed.attempts, 1);
+          assert.equal(changed.runs[0]?.status, "running");
+          assert.deepEqual(changed.runs[0]?.modelSelection, runSelection);
+          assert.deepEqual(changed.thread.modelSelection, composerSelection);
 
-        // Choosing the running run's selection again replaces the saved choice.
-        yield* steer("steer-reverted", runSelection);
-        const reverted = yield* orchestrator.getThreadProjection(threadId);
-        assert.deepEqual(steered, ["steer-changed", "steer-reverted"]);
-        assert.lengthOf(reverted.attempts, 1);
-        assert.deepEqual(reverted.thread.modelSelection, runSelection);
+          yield* steer("steer-reverted", runSelection);
+          const reverted = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(steered, ["steer-changed", "steer-reverted"]);
+          assert.lengthOf(reverted.attempts, 1);
+          assert.deepEqual(reverted.thread.modelSelection, runSelection);
 
-        // The saved choice moves to another instance while the run keeps going.
-        // Steering with the run's selection brings the thread's instance back too.
-        const otherSelection = {
-          instanceId: ProviderInstanceId.make("codex-work"),
-          model: "other",
-        };
-        const sink = yield* EventSink.EventSinkV2;
-        yield* sink.write({
-          events: [
-            {
-              id: EventId.make("switched-away"),
-              type: "thread.provider-switched",
-              threadId,
-              providerInstanceId: otherSelection.instanceId,
-              occurredAt: yield* DateTime.now,
-              payload: {
-                ...reverted.thread,
+          const otherSelection = {
+            instanceId: ProviderInstanceId.make("codex-work"),
+            model: "other",
+          };
+          const sink = yield* EventSink.EventSinkV2;
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make("switched-away"),
+                type: "thread.provider-switched",
+                threadId,
                 providerInstanceId: otherSelection.instanceId,
-                modelSelection: otherSelection,
+                occurredAt: yield* DateTime.now,
+                payload: {
+                  ...reverted.thread,
+                  providerInstanceId: otherSelection.instanceId,
+                  modelSelection: otherSelection,
+                },
               },
-            },
-          ],
-        });
-        yield* steer("steer-back", runSelection);
-        const back = yield* orchestrator.getThreadProjection(threadId);
-        assert.deepEqual(steered, ["steer-changed", "steer-reverted", "steer-back"]);
-        assert.equal(back.thread.providerInstanceId, instanceId);
-        assert.deepEqual(back.thread.modelSelection, runSelection);
-      }).pipe(Effect.provide(layer));
-    }),
-  ),
+            ],
+          });
+          yield* steer("steer-back", runSelection);
+          const back = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(steered, ["steer-changed", "steer-reverted", "steer-back"]);
+          assert.equal(back.thread.providerInstanceId, instanceId);
+          assert.deepEqual(back.thread.modelSelection, runSelection);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
 );
 
 it.effect("starts a steer that missed the turn on the saved next-turn selection", () =>
@@ -663,8 +658,6 @@ it.effect("starts a steer that missed the turn on the saved next-turn selection"
           createdBy: "user",
           creationSource: "web",
         });
-        // The turn ends before the worker delivers the steer, so the steer
-        // becomes a follow-up turn.
         const settled = yield* orchestrator.streamDomainEvents.pipe(
           Stream.filter(
             (event) =>

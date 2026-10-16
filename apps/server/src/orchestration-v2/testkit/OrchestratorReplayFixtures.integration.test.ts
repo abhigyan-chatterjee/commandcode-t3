@@ -19,14 +19,19 @@ import {
   OPENCODE2_HTTP_PROTOCOL,
   OpenCode2OrchestratorReplayHarness,
 } from "../Adapters/OpenCode2AdapterV2.testkit.ts";
+import {
+  materializeMuseReplayWorkspace,
+  MuseOrchestratorReplayHarness,
+} from "../Adapters/MuseAdapterV2.testkit.ts";
 import { PiOrchestratorReplayHarness } from "../Adapters/PiAdapterV2.testkit.ts";
-import * as IdAllocator from "../IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "./fixtures/index.ts";
 import { messageRestartInput } from "./fixtures/message_steering/input.ts";
 import {
   assertProviderNativeSubagentRootTurns,
   materializeFixtureInput,
+  projectionFor,
   type OrchestratorFixtureInput,
   type ProviderOrchestratorReplayVariant,
 } from "./fixtures/shared.ts";
@@ -34,12 +39,12 @@ import {
   runOrchestratorV2ProviderReplayScenario,
   type OrchestratorV2ProviderReplayHarness,
 } from "./ProviderReplayHarness.ts";
-import { checkpointWorkspace } from "./ReplayFixtureWorkspace.ts";
+import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
+import { materializeReplayTranscriptRuntimeInstructions } from "./ReplayRuntimeInstructions.ts";
 import {
-  materializeReplayTranscriptRuntimeInstructions,
   materializeReplayTranscriptWorkspace,
   readProviderReplayTranscript,
-} from "./ReplayTranscriptNdjson.ts";
+} from "@t3tools/provider-testing/replayTranscript";
 
 const readTranscript = Effect.fn("readOrchestratorReplayTranscript")(function* (file: URL) {
   return yield* readProviderReplayTranscript(file);
@@ -102,7 +107,9 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
   const transcript = yield* input.harness.decodeTranscript(
     input.driver.driver === "codex"
       ? materializeReplayTranscriptWorkspace(replayTranscript, workspace)
-      : replayTranscript,
+      : input.driver.driver === "muse"
+        ? yield* materializeMuseReplayWorkspace(replayTranscript, workspace)
+        : replayTranscript,
   );
   const materialized = yield* materializeFixtureInput({
     scenario: input.fixtureName,
@@ -198,7 +205,6 @@ function runFixtureProviderWithRegisteredHarness(input: {
         harness: AcpRegistryOrchestratorReplayHarness,
       }).pipe(Effect.mapError(normalizeTestError), Effect.scoped);
     case "opencode":
-      // One driver, two runtimes: the transcript's protocol says which one recorded it.
       return readTranscript(input.driver.transcriptFile).pipe(
         Effect.flatMap((transcript) =>
           transcript.protocol === OPENCODE2_HTTP_PROTOCOL
@@ -212,6 +218,11 @@ function runFixtureProviderWithRegisteredHarness(input: {
       return runFixtureProvider({
         ...input,
         harness: PiOrchestratorReplayHarness,
+      }).pipe(Effect.mapError(normalizeTestError), Effect.scoped);
+    case "muse":
+      return runFixtureProvider({
+        ...input,
+        harness: MuseOrchestratorReplayHarness,
       }).pipe(Effect.mapError(normalizeTestError), Effect.scoped);
     default:
       return Effect.die(
@@ -251,9 +262,6 @@ describe("orchestrator replay fixtures", () => {
     );
   }
 
-  // A later OpenCode may change an execution start's shape; the client then
-  // reads it as `unreadable.execution.started`. A subagent's turn and a
-  // background follow-up must still start from it.
   it.effect.each(
     (
       [
@@ -286,9 +294,220 @@ describe("orchestrator replay fixtures", () => {
         }),
       }),
   );
+
+  const afterRootFixture = ORCHESTRATOR_REPLAY_FIXTURES.find(
+    (candidate) => candidate.name === "claude_background_subagent_after_root",
+  );
+  const afterRootProvider = afterRootFixture?.providers[0];
+  if (afterRootFixture !== undefined && afterRootProvider !== undefined) {
+    const OPEN_TOOL_ID = "toolu_01QDa5jV5g1H9h6QyDfeJohD";
+    const SUBAGENT_TASK_ID = "a2995bfced8019363";
+
+    const moveOpenToolBeforeRootResult = (
+      move: boolean,
+      entries: ReadonlyArray<ProviderReplayEntry>,
+    ): ReadonlyArray<ProviderReplayEntry> => {
+      if (!move) return entries;
+      const toolIndex = entries.findIndex(
+        (entry) =>
+          entry.type === "emit_inbound" &&
+          (entry.frame as Record<string, any>).message?.content?.[0]?.id === OPEN_TOOL_ID,
+      );
+      const resultIndex = entries.findIndex(
+        (entry) => entry.type === "emit_inbound" && entry.label === "result",
+      );
+      if (toolIndex < 0 || resultIndex < 0) throw new Error("transcript shape changed");
+      const toolEntry = entries[toolIndex]!;
+      const rest = entries.filter((_, index) => index !== toolIndex);
+      return [...rest.slice(0, resultIndex), toolEntry, ...rest.slice(resultIndex)];
+    };
+    // A subagent's foreground Bash run during the root's turn is tailed like a
+    // root call's, so the child's command row streams live.
+    const SUBAGENT_BASH_ID = "toolu_01JMN3SSQCHzUTNua9AWdkiH";
+    it.effect("streams a subagent's foreground Bash output live during the root turn", () =>
+      runFixtureProviderWithRegisteredHarness({
+        fixtureName: afterRootFixture.name,
+        buildInput: afterRootFixture.buildInput,
+        driver: {
+          ...afterRootProvider,
+          assertOutput: (result) => {
+            const childThreadId = projectionFor(result, afterRootFixture.name).subagents[0]
+              ?.childThreadId;
+            assert.exists(childThreadId);
+            const command = result.projections
+              .get(childThreadId)
+              ?.turnItems.find(
+                (item) =>
+                  item.type === "command_execution" &&
+                  JSON.stringify(item.input).includes("SUB_DONE_1"),
+              );
+            assert.exists(command);
+            const streamed = result.commandOutput?.get(command.id);
+            assert.exists(streamed, "the subagent's command must stream its output");
+            assert.include(streamed.output.text, "SUB_DONE_1");
+          },
+        },
+        transformTranscript: (transcript) => {
+          const isBashFrame = (entry: ProviderReplayEntry) => {
+            if (entry.type !== "emit_inbound") return false;
+            const frame = entry.frame as Record<string, any>;
+            return (
+              frame.message?.content?.[0]?.id === SUBAGENT_BASH_ID ||
+              frame.message?.content?.[0]?.tool_use_id === SUBAGENT_BASH_ID ||
+              (frame.type === "system" && frame.tool_use_id === SUBAGENT_BASH_ID)
+            );
+          };
+          // Recorded without the structured result the replay writes output files from.
+          const bashFrames = transcript.entries.filter(isBashFrame).map((entry) => {
+            const frame = (entry as { readonly frame: Record<string, any> }).frame;
+            return frame.type === "user"
+              ? {
+                  ...entry,
+                  frame: { ...frame, tool_use_result: { stdout: "SUB_DONE_1\n", stderr: "" } },
+                }
+              : entry;
+          });
+          const rest = transcript.entries.filter((entry) => !isBashFrame(entry));
+          const resultIndex = rest.findIndex(
+            (entry) => entry.type === "emit_inbound" && entry.label === "result",
+          );
+          assert.lengthOf(bashFrames, 4, "transcript shape changed");
+          assert.isAtLeast(resultIndex, 0, "transcript shape changed");
+          return {
+            ...transcript,
+            entries: [...rest.slice(0, resultIndex), ...bashFrames, ...rest.slice(resultIndex)],
+          };
+        },
+      }),
+    );
+
+    it.effect.each(
+      (["WebFetch", "Write"] as const).flatMap((tool) =>
+        (["before root settles", "while root is idle"] as const).flatMap((opens) =>
+          (["stopped", "failed"] as const).map((status) => [tool, opens, status] as const),
+        ),
+      ),
+    )(
+      "ends a background subagent's open %s (opened %s) when its notification is %s",
+      ([tool, opens, notificationStatus]) =>
+        runFixtureProviderWithRegisteredHarness({
+          fixtureName: afterRootFixture.name,
+          buildInput: afterRootFixture.buildInput,
+          driver: {
+            ...afterRootProvider,
+            assertOutput: (result) => {
+              const parent = projectionFor(result, afterRootFixture.name);
+              assert.deepEqual(
+                parent.runs.map((run) => run.status),
+                ["completed", "completed"],
+              );
+              const subagent = parent.subagents[0];
+              assert.equal(
+                subagent?.status,
+                notificationStatus === "stopped" ? "cancelled" : "failed",
+              );
+              const childThreadId = subagent?.childThreadId;
+              assert.exists(childThreadId);
+              const child = result.projections.get(childThreadId);
+              assert.exists(child);
+              const fetches = child.turnItems.filter(
+                (item) => item.type === (tool === "WebFetch" ? "web_search" : "file_change"),
+              );
+              assert.lengthOf(fetches, 1, `the ${tool} reached the child thread`);
+              assert.deepEqual(
+                {
+                  openTool: fetches.map((item) => item.status),
+                  openChildNodes: child.nodes
+                    .filter(
+                      (node) =>
+                        node.status === "running" ||
+                        node.status === "pending" ||
+                        node.status === "waiting",
+                    )
+                    .map((node) => `${node.kind}:${node.status}`),
+                },
+                {
+                  openTool: [notificationStatus === "stopped" ? "interrupted" : "failed"],
+                  openChildNodes: [],
+                },
+              );
+            },
+          },
+          transformTranscript: (transcript) => ({
+            ...transcript,
+            entries: moveOpenToolBeforeRootResult(
+              opens === "before root settles",
+              transcript.entries.flatMap((entry): ReadonlyArray<ProviderReplayEntry> => {
+                if (entry.type !== "emit_inbound") return [entry];
+                const frame = entry.frame as Record<string, any>;
+                if (
+                  frame.type === "assistant" &&
+                  frame.message?.content?.[0]?.id === OPEN_TOOL_ID
+                ) {
+                  return [
+                    {
+                      ...entry,
+                      frame: {
+                        ...frame,
+                        message: {
+                          ...frame.message,
+                          content: [
+                            {
+                              ...frame.message.content[0],
+                              name: tool,
+                              input:
+                                tool === "WebFetch"
+                                  ? { url: "https://example.com", prompt: "Summarize" }
+                                  : { file_path: "notes.txt", content: "SUB_DONE_2" },
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  ];
+                }
+                if (
+                  (frame.type === "system" &&
+                    (frame.subtype === "task_started" || frame.subtype === "task_notification") &&
+                    frame.tool_use_id === OPEN_TOOL_ID) ||
+                  (frame.type === "user" &&
+                    frame.message?.content?.[0]?.tool_use_id === OPEN_TOOL_ID) ||
+                  (frame.type === "assistant" &&
+                    frame.parent_tool_use_id !== null &&
+                    frame.message?.content?.[0]?.text === "SUB_FINAL_REPORT")
+                ) {
+                  return [];
+                }
+                if (frame.type === "system" && frame.subtype === "task_updated") {
+                  return [
+                    {
+                      ...entry,
+                      frame: {
+                        ...frame,
+                        patch: {
+                          ...frame.patch,
+                          status: notificationStatus === "stopped" ? "killed" : "failed",
+                        },
+                      },
+                    },
+                  ];
+                }
+                if (
+                  frame.type === "system" &&
+                  frame.subtype === "task_notification" &&
+                  frame.task_id === SUBAGENT_TASK_ID
+                ) {
+                  return [{ ...entry, frame: { ...frame, status: notificationStatus } }];
+                }
+                return [entry];
+              }),
+            ),
+          }),
+        }),
+    );
+  }
 });
 
-/** The same event with an envelope this build cannot decode, as a newer OpenCode may send. */
 function undecodableEvent(entry: ProviderReplayEntry): ProviderReplayEntry {
   if (entry.type !== "emit_inbound") return entry;
   const frame = entry.frame as { readonly event: Record<string, unknown> };

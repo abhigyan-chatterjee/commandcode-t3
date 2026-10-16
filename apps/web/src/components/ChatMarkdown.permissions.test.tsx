@@ -29,6 +29,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => serverConfig }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => undefined }));
 vi.mock("../hooks/useSettings", () => ({
   getClientSettings: () => DEFAULT_CLIENT_SETTINGS,
   useClientSettings: (select?: (value: typeof DEFAULT_CLIENT_SETTINGS) => unknown) =>
@@ -56,8 +57,6 @@ vi.mock("../state/session", async () => {
     id !== null &&
     (scope !== AuthOrchestrationOperateScope || id !== threadRef.environmentId || state.allowed);
   return {
-    // Asset atoms read these at module scope; the markdown tests only exercise
-    // the task grant.
     environmentSession: {
       sessionStateAtom: () => ({}),
       preparedConnectionValueAtom: () => ({}),
