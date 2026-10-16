@@ -43,7 +43,7 @@ Before using Command Code with T3 Code, please review Command Code's [Terms of S
 
 ## What This Fork Adds
 
-- **Built-in Provider**: `commandcode` appears alongside Codex, Claude Code, Cursor, Grok Build, OpenCode, Antigravity, and Pi in Settings and thread selectors.
+- **Built-in Provider**: `commandcode` appears alongside Codex, Claude Code, Cursor, Grok Build, OpenCode, Antigravity, Muse Code, and Pi in Settings and thread selectors.
 - **Streaming Turns over ACP**: Real-time tool calls, diffs, plans, and assistant text stream from the `cmd acp` Agent Client Protocol server.
 - **Session Continuation**: Every thread is a real Command Code session; reopening a thread replays and continues the same transcript that `cmd --resume` lists.
 - **Dynamic Model Catalog**: The Command Code model catalog (with per-model reasoning effort) is exposed in the model selector and is scoped to the thread.

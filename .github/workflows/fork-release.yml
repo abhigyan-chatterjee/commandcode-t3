@@ -61,12 +61,17 @@ jobs:
             echo "::error::could not read the base version from apps/server/package.json" >&2
             exit 1
           fi
-          highest="$(git tag --list 'v0.0.*' | sed -n 's/^v\(0\.0\.[0-9][0-9]*\)$/\1/p' | sort -t. -k3,3n | tail -n 1)"
-          current="${highest:-$base}"
-          if [ "$(printf '%s\n%s\n' "$current" "$base" | sort -t. -k3,3n | tail -n 1)" = "$base" ]; then
-            current="$base"
+          highest="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sed -n 's/^v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)"
+          current="$base"
+          if [ -n "$highest" ]; then
+            # Compare major, then minor, then patch: upstream moving to 0.1.0
+            # must not be outranked by the fork's older 0.0.<patch> tags.
+            current="$(printf '%s\n%s\n' "$current" "$highest" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)"
           fi
-          version="0.0.$(( ${current##*.} + 1 ))"
+          major="${current%%.*}"
+          rest="${current#*.}"
+          minor="${rest%%.*}"
+          version="${major}.${minor}.$(( ${current##*.} + 1 ))"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
           echo "Releasing ${version} (previous: ${current})."
