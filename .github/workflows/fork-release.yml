@@ -1,0 +1,259 @@
+name: Fork release
+
+# Fork-owned release train. Every push to `main` cuts the next patch version,
+# builds the Linux desktop app (AppImage + deb) and the self-contained CLI
+# archive, and publishes one GitHub Release whose assets are exactly what
+# `scripts/install.sh` and the in-app updater download:
+#
+#   t3-<version>-linux-x64.tar.gz   the CLI archive the installer unpacks
+#   SHA256SUMS                      the checksums that installer verifies
+#   T3-Code-<version>-x86_64.AppImage / -amd64.deb
+#   latest-linux.yml                the electron-updater feed
+#
+# The desktop build derives its update feed from the repository it runs in
+# (electron-builder's github publish provider, resolved from
+# GITHUB_REPOSITORY), so installed apps update over the air from our releases
+# and nothing needs a repository secret.
+#
+# Upstream's release.yml is deliberately left alone: it publishes the npm
+# `@t3code` packages, the hosted web app, AUR, and Discord announcements, all of
+# which belong to T3 Tools' infrastructure rather than to a fork.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Releases must serialize: two runs computing the next patch version at once
+# would build the same version twice. Running releases are never canceled, so a
+# long build cannot be dropped by a later push.
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      tag: ${{ steps.next.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # The next version is one patch above the highest of: the shipped package
+      # version and every `v0.0.<patch>` tag this repository already has. That
+      # keeps versions monotonic across pushes without ever committing a bump
+      # back to `main` (which would retrigger this workflow forever).
+      - name: Compute next version
+        id: next
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(sed -n 's/.*"version": *"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' apps/server/package.json | head -n 1)"
+          if [ -z "$base" ]; then
+            echo "::error::could not read the base version from apps/server/package.json" >&2
+            exit 1
+          fi
+          highest="$(git tag --list 'v0.0.*' | sed -n 's/^v\(0\.0\.[0-9][0-9]*\)$/\1/p' | sort -t. -k3,3n | tail -n 1)"
+          current="${highest:-$base}"
+          if [ "$(printf '%s\n%s\n' "$current" "$base" | sort -t. -k3,3n | tail -n 1)" = "$base" ]; then
+            current="$base"
+          fi
+          version="0.0.$(( ${current##*.} + 1 ))"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${version} (previous: ${current})."
+
+  build:
+    name: Build release assets
+    needs: [version]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      T3CODE_DESKTOP_VERSION: ${{ needs.version.outputs.version }}
+      # Pin the updater feed at this repository explicitly rather than relying on
+      # GITHUB_REPOSITORY. Without a repository, the desktop build emits no
+      # latest-linux.yml and the app ships unable to update itself.
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/setup-apt-mirrors
+
+      # @t3tools/desktop#build compiles the Linux browser secret helper on the
+      # build host, which needs libsecret headers, and the AppImage icon set is
+      # resized with ImageMagick.
+      - name: Install Linux build libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libsecret-1-dev pkg-config
+          if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
+            sudo apt-get install -y imagemagick
+          fi
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache Rust builds
+        uses: actions/cache@v6
+        with:
+          path: |
+            native/resource-monitor/target
+            native/kde-snap-shot/target
+            native/hyprland-snap-shot/target
+          key: fork-release-rust-${{ hashFiles('native/**/Cargo.lock', 'native/**/Cargo.toml', 'native/**/src/**') }}
+
+      # The version is baked into the bundle, the single-executable, and the
+      # desktop app, so it must be aligned before anything is built.
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "${{ needs.version.outputs.version }}"
+
+      # Runs t3#build (which depends on @t3tools/web#build) and
+      # @t3tools/desktop#build, so apps/server/dist holds the server bundle plus
+      # the web client and apps/desktop/dist-electron the Electron main.
+      - name: Build JS bundle
+        run: vp run build:desktop
+
+      - name: Build CLI single-executable
+        env:
+          # The exact version, not a major: vp downloads it from nodejs.org/dist
+          # on the runner, and only exact versions have a dist directory. Keep in
+          # step with SEA_NODE_VERSION in apps/server/vite.config.ts.
+          VP_NODE_VERSION: "26.8.2"
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+
+      - name: Build resource monitor for the CLI archive
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml
+          target_dir="$RUNNER_TEMP/cli-resource-monitor/linux-x64"
+          mkdir -p "$target_dir"
+          cp native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor \
+            "$target_dir/t3-resource-monitor"
+
+      - name: Build CLI archive
+        run: |
+          node scripts/build-cli-archive.ts \
+            --platform linux \
+            --arch x64 \
+            --version "${{ needs.version.outputs.version }}" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" \
+            --output-dir release-cli
+
+      - name: Smoke-test CLI archive
+        run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "${{ needs.version.outputs.version }}"
+
+      # --skip-build: the JS bundle above is already in place. No signing
+      # secrets are configured on the fork, so the AppImage and deb are
+      # unsigned, which is what `--signed` would otherwise change.
+      - name: Build desktop AppImage and deb
+        run: |
+          vp run dist:desktop:artifact \
+            --platform linux \
+            --target AppImage \
+            --arch x64 \
+            --build-version "${{ needs.version.outputs.version }}" \
+            --skip-build \
+            --verbose
+
+      - name: Collect release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp release-cli/*.tar.gz release-assets/
+          # latest-linux.yml is the electron-updater feed; installer archives and
+          # checksums sit beside it at the release root.
+          for file in release/T3-Code-* release/latest-linux.yml; do
+            [ -e "$file" ] && cp "$file" release-assets/ || true
+          done
+          ls -l release-assets
+          if [ ! -f release-assets/latest-linux.yml ]; then
+            echo "::error::latest-linux.yml was not produced, so the app would ship without an update feed. Check T3CODE_DESKTOP_UPDATE_REPOSITORY." >&2
+            exit 1
+          fi
+          if ! ls release-assets/t3-*-linux-x64.tar.gz >/dev/null 2>&1; then
+            echo "::error::the CLI archive is missing; install.sh downloads it from the release." >&2
+            exit 1
+          fi
+          # Bare file names, not `./name`: install.sh greps SHA256SUMS for a
+          # line ending in the archive name, and the `./` prefix defeats it.
+          (cd release-assets && rm -f SHA256SUMS && sha256sum * > SHA256SUMS)
+          cat release-assets/SHA256SUMS
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: fork-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: fork-release-assets
+          path: release-assets
+
+      - name: List assets
+        run: ls -l release-assets
+
+      # Not a prerelease: the updater follows the release channel, and a
+      # prerelease flag would keep the feed from ever being offered.
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: T3 Code ${{ needs.version.outputs.version }}
+          make_latest: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          body: |
+            Linux build of this fork, cut automatically from `main` at
+            ${{ github.sha }}.
+
+            **Install the CLI**
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh
+            ```
+
+            **Desktop app**: download `T3-Code-${{ needs.version.outputs.version }}-x86_64.AppImage`,
+            `chmod +x` it, and run it. Installed apps update themselves from this
+            repository's releases.
+
+            Command Code runs as an ACP provider (`cmd acp`) alongside the other
+            built-in providers; see `docs/user/providers-commandcode.md`.
+          files: release-assets/*

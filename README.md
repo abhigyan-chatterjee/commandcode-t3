@@ -76,7 +76,20 @@ vp run dev
 
 ## Desktop app
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+This fork publishes its own Linux builds. Download the AppImage or `.deb` from [this fork's GitHub Releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases): every push to `main` cuts a new version, and an installed app updates itself over the air from those releases.
+
+#### Linux (AppImage)
+
+Take `T3-Code-<version>-x86_64.AppImage` from the [latest release](https://github.com/abhigyan-chatterjee/commandcode-t3/releases/latest), then:
+
+```bash
+chmod +x T3-Code-*-x86_64.AppImage
+./T3-Code-*-x86_64.AppImage
+```
+
+#### Windows, macOS, Arch
+
+The `winget`, Homebrew, and AUR packages below belong to upstream T3 Code's distribution, not to this fork. Use the [fork's releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases) on Linux, or build from source above.
 
 #### Windows (`winget`)
 
@@ -92,7 +105,7 @@ brew install --cask t3-code
 
 #### Debian, Ubuntu (`.deb`)
 
-Download the `.deb` from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), then:
+Download the `.deb` from [this fork's releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases), then:
 
 ```bash
 sudo apt install ./T3-Code-*.deb
