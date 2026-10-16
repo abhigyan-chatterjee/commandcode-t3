@@ -51,7 +51,7 @@ it.layer(testLayer)("CommandCodeDriver", (it) => {
   it.effect("decodes an empty config into enabled defaults", () =>
     Effect.sync(() => {
       const config = CommandCodeDriver.defaultConfig();
-      expect(config.enabled).toBe(true);
+      expect(config.enabled).toBe(false);
       // The schema's decoding default fills in the provider binary name.
       expect(config.binaryPath).toBe("cmd");
       expect(config.launchArgs).toBe("");

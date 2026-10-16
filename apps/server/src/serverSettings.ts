@@ -417,7 +417,8 @@ function restoreUsedProviders(
       instance.enabled === undefined &&
       (instance.driver === "cursor" ||
         instance.driver === "grok" ||
-        instance.driver === "opencode") &&
+        instance.driver === "opencode" ||
+        instance.driver === "commandcode") &&
       usedProviderInstances.has(instanceId)
         ? { ...instance, enabled: true }
         : instance,
@@ -439,6 +440,10 @@ function restoreUsedProviders(
       opencode: {
         ...settings.providers.opencode,
         enabled: persisted.providers?.opencode?.enabled ?? usedProviders.has("opencode"),
+      },
+      commandcode: {
+        ...settings.providers.commandcode,
+        enabled: persisted.providers?.commandcode?.enabled ?? usedProviders.has("commandcode"),
       },
     },
     providerInstances,
@@ -505,6 +510,7 @@ const PERSISTED_SERVER_SETTINGS_DEFAULTS = {
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: undefined },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: undefined },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: undefined },
+    commandcode: { ...DEFAULT_SERVER_SETTINGS.providers.commandcode, enabled: undefined },
   },
 };
 

@@ -1378,6 +1378,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           codex: {
             binaryPath: "/opt/homebrew/bin/codex",
           },
+          commandcode: {
+            enabled: false,
+          },
           cursor: {
             enabled: false,
           },

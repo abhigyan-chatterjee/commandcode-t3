@@ -3049,6 +3049,7 @@ it.layer(
               "antigravity",
               "claudeAgent",
               "codex",
+              "commandcode",
               "cursor",
               "grok",
               "opencode",

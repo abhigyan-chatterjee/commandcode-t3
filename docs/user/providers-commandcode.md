@@ -4,7 +4,8 @@ Command Code (`cmd`) runs as an [Agent Client Protocol](https://agentclientproto
 server. T3 Code starts `cmd acp`, opens a session for the thread's project
 directory, and speaks ACP over stdio. The whole Command Code harness — tools,
 skills, the permission engine, sessions, and the model catalog — stays in
-Command Code; T3 Code owns the transport and the timeline.
+Command Code; T3 Code owns the transport and the timeline. Like Cursor, Grok,
+and Pi it is off by default: enable it in **Settings → Providers**.
 [Provider setup](./install.md#providers) covers installation, Settings >
 Providers, and custom binaries.
 

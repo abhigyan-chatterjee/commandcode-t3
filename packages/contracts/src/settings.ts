@@ -992,8 +992,9 @@ export type OpenCodeSettings = typeof OpenCodeSettings.Type;
 
 export const CommandCodeSettings = makeProviderSettingsSchema(
   {
+    // Off by default like Cursor, Grok, and Pi. Users opt in from Settings.
     enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     binaryPath: makeBinaryPathSetting("cmd").pipe(

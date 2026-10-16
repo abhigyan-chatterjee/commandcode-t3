@@ -54,7 +54,7 @@ describe("CommandCodeAdapterV2", () => {
 
   it("decodes an empty config into the cmd defaults", () => {
     const config = CommandCodeAdapterV2Driver.defaultConfig();
-    assert.strictEqual(config.enabled, true);
+    assert.strictEqual(config.enabled, false);
     assert.strictEqual(config.binaryPath, "cmd");
     assert.strictEqual(config.launchArgs, "");
   });
