@@ -204,102 +204,106 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
     );
   });
 
-  const generateCommitMessage: ProviderTextGeneration["generateCommitMessage"] =
-    Effect.fn("CommandCodeTextGeneration.generateCommitMessage")(function* (input) {
-      const { prompt, outputSchema } = buildCommitMessagePrompt({
-        branch: input.branch,
-        stagedSummary: input.stagedSummary,
-        stagedPatch: input.stagedPatch,
-        includeBranch: input.includeBranch === true,
-        policy: input.policy,
-      });
-
-      const generated = yield* runCommandCodeJson({
-        operation: "generateCommitMessage",
-        cwd: input.cwd,
-        prompt,
-        outputSchemaJson: outputSchema,
-        modelSelection: input.modelSelection,
-      });
-
-      return {
-        subject: sanitizeCommitSubject(generated.subject),
-        body: generated.body.trim(),
-        ...("branch" in generated && typeof generated.branch === "string"
-          ? { branch: sanitizeFeatureBranchName(generated.branch) }
-          : {}),
-      };
+  const generateCommitMessage: ProviderTextGeneration["generateCommitMessage"] = Effect.fn(
+    "CommandCodeTextGeneration.generateCommitMessage",
+  )(function* (input) {
+    const { prompt, outputSchema } = buildCommitMessagePrompt({
+      branch: input.branch,
+      stagedSummary: input.stagedSummary,
+      stagedPatch: input.stagedPatch,
+      includeBranch: input.includeBranch === true,
+      policy: input.policy,
     });
 
-  const generatePrContent: ProviderTextGeneration["generatePrContent"] =
-    Effect.fn("CommandCodeTextGeneration.generatePrContent")(function* (input) {
-      const { prompt, outputSchema } = buildPrContentPrompt({
-        baseBranch: input.baseBranch,
-        headBranch: input.headBranch,
-        commitSummary: input.commitSummary,
-        diffSummary: input.diffSummary,
-        diffPatch: input.diffPatch,
-        policy: input.policy,
-        changeRequestTemplate: input.changeRequestTemplate,
-      });
-
-      const generated = yield* runCommandCodeJson({
-        operation: "generatePrContent",
-        cwd: input.cwd,
-        prompt,
-        outputSchemaJson: outputSchema,
-        modelSelection: input.modelSelection,
-      });
-
-      return {
-        title: sanitizePrTitle(generated.title),
-        body: generated.body.trim(),
-      };
+    const generated = yield* runCommandCodeJson({
+      operation: "generateCommitMessage",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
     });
 
-  const generateBranchName: ProviderTextGeneration["generateBranchName"] =
-    Effect.fn("CommandCodeTextGeneration.generateBranchName")(function* (input) {
-      const { prompt, outputSchema } = buildBranchNamePrompt({
-        message: input.message,
-        attachments: input.attachments,
-        naming: input.naming,
-      });
+    return {
+      subject: sanitizeCommitSubject(generated.subject),
+      body: generated.body.trim(),
+      ...("branch" in generated && typeof generated.branch === "string"
+        ? { branch: sanitizeFeatureBranchName(generated.branch) }
+        : {}),
+    };
+  });
 
-      const generated = yield* runCommandCodeJson({
-        operation: "generateBranchName",
-        cwd: input.cwd,
-        prompt,
-        outputSchemaJson: outputSchema,
-        modelSelection: input.modelSelection,
-      });
-
-      return {
-        branch: formatGeneratedBranchName(generated.branch, input.naming),
-      };
+  const generatePrContent: ProviderTextGeneration["generatePrContent"] = Effect.fn(
+    "CommandCodeTextGeneration.generatePrContent",
+  )(function* (input) {
+    const { prompt, outputSchema } = buildPrContentPrompt({
+      baseBranch: input.baseBranch,
+      headBranch: input.headBranch,
+      commitSummary: input.commitSummary,
+      diffSummary: input.diffSummary,
+      diffPatch: input.diffPatch,
+      policy: input.policy,
+      changeRequestTemplate: input.changeRequestTemplate,
     });
 
-  const generateThreadTitle: ProviderTextGeneration["generateThreadTitle"] =
-    Effect.fn("CommandCodeTextGeneration.generateThreadTitle")(function* (input) {
-      const { prompt, outputSchema } = buildThreadTitlePrompt({
-        message: input.message,
-        previousTitle: input.previousTitle,
-        linkedContext: input.linkedContext,
-        attachments: input.attachments,
-      });
-
-      const generated = yield* runCommandCodeJson({
-        operation: "generateThreadTitle",
-        cwd: input.cwd,
-        prompt,
-        outputSchemaJson: outputSchema,
-        modelSelection: input.modelSelection,
-      });
-
-      return {
-        title: sanitizeThreadTitle(generated.title),
-        ...(generated.needsRefinement ? { needsRefinement: true } : {}),
-      };
+    const generated = yield* runCommandCodeJson({
+      operation: "generatePrContent",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
     });
+
+    return {
+      title: sanitizePrTitle(generated.title),
+      body: generated.body.trim(),
+    };
+  });
+
+  const generateBranchName: ProviderTextGeneration["generateBranchName"] = Effect.fn(
+    "CommandCodeTextGeneration.generateBranchName",
+  )(function* (input) {
+    const { prompt, outputSchema } = buildBranchNamePrompt({
+      message: input.message,
+      attachments: input.attachments,
+      naming: input.naming,
+    });
+
+    const generated = yield* runCommandCodeJson({
+      operation: "generateBranchName",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
+    });
+
+    return {
+      branch: formatGeneratedBranchName(generated.branch, input.naming),
+    };
+  });
+
+  const generateThreadTitle: ProviderTextGeneration["generateThreadTitle"] = Effect.fn(
+    "CommandCodeTextGeneration.generateThreadTitle",
+  )(function* (input) {
+    const { prompt, outputSchema } = buildThreadTitlePrompt({
+      message: input.message,
+      previousTitle: input.previousTitle,
+      linkedContext: input.linkedContext,
+      attachments: input.attachments,
+    });
+
+    const generated = yield* runCommandCodeJson({
+      operation: "generateThreadTitle",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
+    });
+
+    return {
+      title: sanitizeThreadTitle(generated.title),
+      ...(generated.needsRefinement ? { needsRefinement: true } : {}),
+    };
+  });
 
   // A review guide must investigate the checkout read-only, which headless
   // `cmd -p` does not guarantee, so it fails rather than answering blind.
