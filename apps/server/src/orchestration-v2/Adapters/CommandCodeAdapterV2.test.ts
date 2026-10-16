@@ -3,7 +3,7 @@ import { defaultInstanceIdForDriver } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 import { BUILT_IN_PROVIDER_ADAPTER_DRIVER_KINDS_V2 } from "../builtInProviderAdapterDrivers.ts";
-import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
+import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 import {
   COMMAND_CODE_DEFAULT_INSTANCE_ID,
   COMMAND_CODE_PROVIDER,

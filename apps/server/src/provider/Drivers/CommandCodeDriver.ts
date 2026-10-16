@@ -20,12 +20,36 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
+import {
+  defaultProviderContinuationIdentity,
+  type ProviderDriver,
+  type ProviderInstance,
+} from "@t3tools/provider-core/server/driver";
+import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import {
+  makeCachedProviderMaintenanceResolution,
+  makeManualOnlyProviderMaintenanceCapabilities,
+  makeProviderMaintenanceCapabilities,
+  type ProviderMaintenanceCapabilitiesResolver,
+  resolveProviderMaintenanceCapabilitiesEffect,
+} from "@t3tools/provider-core/server/maintenanceResolver";
+import {
+  haveProviderSnapshotSettingsChanged,
+  makeProviderSnapshotSettingsSource,
+  type ProviderSnapshotSettings,
+} from "@t3tools/provider-core/server/snapshotSettings";
+
 import { makeCommandCodeTextGeneration } from "../../textGeneration/CommandCodeTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
-import { expandHomePath } from "../../pathExpansion.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
-import { ProviderDriverError } from "../Errors.ts";
 import {
   CommandCodeAdapterV2Driver,
   type CommandCodeAdapterV2DriverEnv,
@@ -35,28 +59,7 @@ import {
   checkCommandCodeProviderStatus,
   enrichCommandCodeSnapshot,
 } from "../CommandCodeProvider.ts";
-import { ProviderEventLoggers } from "../ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
-import {
-  defaultProviderContinuationIdentity,
-  type ProviderDriver,
-  type ProviderInstance,
-} from "../ProviderDriver.ts";
-import { withInstanceIdentity } from "./instanceIdentity.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import {
-  makeCachedProviderMaintenanceResolution,
-  makeManualOnlyProviderMaintenanceCapabilities,
-  makeProviderMaintenanceCapabilities,
-  type ProviderMaintenanceCapabilitiesResolver,
-  resolveProviderMaintenanceCapabilitiesEffect,
-} from "../providerMaintenance.ts";
-import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
 
 const decodeCommandCodeSettings = Schema.decodeSync(CommandCodeSettings);
 
@@ -93,9 +96,10 @@ export type CommandCodeDriverEnv =
   | HttpClient.HttpClient
   | ModelManifest.ModelManifest
   | Path.Path
-  | ProviderEventLoggers
-  | ServerConfig
-  | ServerSettingsService;
+  | ProviderEventLoggers.ProviderEventLoggers
+  | ProviderHost.ProviderHost
+  | ProviderLatestVersions.ProviderLatestVersions
+  | ServerConfig;
 
 export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeDriverEnv> = {
   driverKind: DRIVER_KIND,
@@ -111,9 +115,9 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
-      const serverSettings = yield* ServerSettingsService;
+      const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
       const modelManifest = yield* ModelManifest.ModelManifest;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      const processEnv = yield* mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -121,7 +125,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
       const effectiveConfig = {
         ...config,
         enabled,
-        binaryPath: expandHomePath(config.binaryPath),
+        binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
       } satisfies CommandCodeSettings;
       const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
         resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
@@ -175,7 +179,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
         Effect.provideService(Path.Path, path),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
+      const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
       const snapshot = yield* makeManagedServerProvider<
         ProviderSnapshotSettings<CommandCodeSettings>
       >({
@@ -199,6 +203,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
                 httpClient,
               }),
             ),
+            Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
           ),
       }).pipe(
         Effect.mapError(

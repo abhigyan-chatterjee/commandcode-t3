@@ -23,19 +23,20 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import * as TextGeneration from "./TextGeneration.ts";
+import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
+import { investigationUnsupported } from "@t3tools/provider-core/server/textGenerationOperations";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
-} from "./TextGenerationPrompts.ts";
+} from "@t3tools/provider-core/server/textGenerationPrompts";
 import {
   normalizeCliError,
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
-} from "./TextGenerationUtils.ts";
+} from "@t3tools/provider-core/server/textGenerationUtils";
 
 const COMMAND_CODE_TIMEOUT_MS = 180_000;
 
@@ -203,7 +204,7 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
     );
   });
 
-  const generateCommitMessage: TextGeneration.TextGeneration["Service"]["generateCommitMessage"] =
+  const generateCommitMessage: ProviderTextGeneration["generateCommitMessage"] =
     Effect.fn("CommandCodeTextGeneration.generateCommitMessage")(function* (input) {
       const { prompt, outputSchema } = buildCommitMessagePrompt({
         branch: input.branch,
@@ -230,7 +231,7 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       };
     });
 
-  const generatePrContent: TextGeneration.TextGeneration["Service"]["generatePrContent"] =
+  const generatePrContent: ProviderTextGeneration["generatePrContent"] =
     Effect.fn("CommandCodeTextGeneration.generatePrContent")(function* (input) {
       const { prompt, outputSchema } = buildPrContentPrompt({
         baseBranch: input.baseBranch,
@@ -256,7 +257,7 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       };
     });
 
-  const generateBranchName: TextGeneration.TextGeneration["Service"]["generateBranchName"] =
+  const generateBranchName: ProviderTextGeneration["generateBranchName"] =
     Effect.fn("CommandCodeTextGeneration.generateBranchName")(function* (input) {
       const { prompt, outputSchema } = buildBranchNamePrompt({
         message: input.message,
@@ -277,7 +278,7 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       };
     });
 
-  const generateThreadTitle: TextGeneration.TextGeneration["Service"]["generateThreadTitle"] =
+  const generateThreadTitle: ProviderTextGeneration["generateThreadTitle"] =
     Effect.fn("CommandCodeTextGeneration.generateThreadTitle")(function* (input) {
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
@@ -300,10 +301,16 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       };
     });
 
+  // A review guide must investigate the checkout read-only, which headless
+  // `cmd -p` does not guarantee, so it fails rather than answering blind.
+  const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = () =>
+    Effect.fail(investigationUnsupported("generateReviewGuide", "Command Code"));
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
-  } satisfies TextGeneration.TextGeneration["Service"];
+    generateReviewGuide,
+  } satisfies ProviderTextGeneration;
 });

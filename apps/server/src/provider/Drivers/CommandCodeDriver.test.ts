@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -13,35 +13,50 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
-import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../ProviderEventLoggers.ts";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import * as ProviderHostLive from "../ProviderHostLive.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import { CommandCodeDriver } from "./CommandCodeDriver.ts";
 
-const testLayer = ServerConfig.layerTest(process.cwd(), {
+const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-commandcode-driver-",
 }).pipe(
   Layer.provideMerge(NodeServices.layer),
-  Layer.provideMerge(IdAllocator.layer),
-  Layer.provideMerge(ServerSettingsService.layerTest()),
-  Layer.provideMerge(ModelManifest.layerTest),
-  Layer.provideMerge(
-    Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-      shouldRunScopeWork: () => Effect.succeed(false),
-    }),
-  ),
-  Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
   Layer.provideMerge(
     Layer.succeed(
       HttpClient.HttpClient,
       HttpClient.make(() => Effect.die("Disabled Command Code must not make an HTTP request")),
     ),
   ),
+  Layer.provideMerge(ServerSettingsService.layerTest()),
+  Layer.provideMerge(
+    Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+      shouldRunScopeWork: () => Effect.succeed(false),
+    }),
+  ),
+  Layer.provideMerge(
+    Layer.succeed(
+      ProviderEventLoggers.ProviderEventLoggers,
+      ProviderEventLoggers.NoOpProviderEventLoggers,
+    ),
+  ),
+  Layer.provideMerge(ModelManifest.layerTest),
+  Layer.provideMerge(IdAllocator.layer),
+  Layer.provideMerge(ProviderLatestVersions.layer),
+  Layer.provideMerge(McpProviderSessions.layer),
+);
+const testLayer = ProviderHostLive.layer.pipe(
+  Layer.provideMerge(ServerSecretStore.layer),
+  Layer.provideMerge(layerDeps),
 );
 
 // The `#!/bin/sh` stub below cannot be resolved as an executable on Windows.
-const windowsHost = HostProcessPlatform.defaultValue() === "win32";
+const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
 const noSpawn = ChildProcessSpawner.make(() =>
   Effect.die("Disabled Command Code must not spawn a process"),

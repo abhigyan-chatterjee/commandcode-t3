@@ -22,7 +22,7 @@
  *
  * @module orchestration-v2/Adapters/CommandCodeAdapterV2
  */
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSelfInvocation, type SelfInvocation } from "@t3tools/shared/nodeRuntime";
 import {
   CommandCodeSettings,
@@ -41,24 +41,25 @@ import type * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 
-import * as ServerConfig from "../../config.ts";
-import { makeAcpNativeLoggerFactory } from "../../provider/acp/AcpNativeLogging.ts";
-import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
-import * as ProviderEventLoggers from "../../provider/ProviderEventLoggers.ts";
-import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
-import * as IdAllocator from "../IdAllocator.ts";
-import * as ProviderAdapter from "../ProviderAdapter.ts";
-import {
-  ProviderAdapterDriverCreateError,
-  type ProviderAdapterDriver,
-  type ProviderAdapterDriverCreateInput,
-} from "../ProviderAdapterDriver.ts";
+import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
+import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
   AcpProviderCapabilitiesV2,
   makeAcpAdapterV2,
   type AcpAdapterV2Flavor,
   type AcpAdapterV2RuntimeInput,
-} from "./AcpAdapterV2.ts";
+} from "@t3tools/provider-acp/server/adapter";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import {
+  ProviderAdapterDriverCreateError,
+  type ProviderAdapterDriver,
+  type ProviderAdapterDriverCreateInput,
+} from "@t3tools/provider-core/server/adapterDriver";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 
 export const COMMAND_CODE_PROVIDER = ProviderDriverKind.make("commandcode");
 const COMMAND_CODE_DRIVER_KIND = COMMAND_CODE_PROVIDER;
@@ -106,19 +107,15 @@ export interface CommandCodeAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: CommandCodeSettings;
   readonly environment: NodeJS.ProcessEnv;
-  readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
-  readonly crypto: Crypto.Crypto;
+  readonly attachmentsDir: string;
   readonly selfInvocation: SelfInvocation;
-  readonly fileSystem: FileSystem.FileSystem;
-  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly serverConfig: ServerConfig.ServerConfig["Service"];
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly makeRuntime?: (
     input: AcpAdapterV2RuntimeInput,
   ) => Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
     EffectAcpErrors.AcpError,
-    Crypto.Crypto | Scope.Scope
+    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
   >;
 }
 
@@ -154,7 +151,7 @@ function makeCommandCodeAcpRuntime(options: CommandCodeAdapterV2Options) {
   ): Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
     EffectAcpErrors.AcpError,
-    Crypto.Crypto | Scope.Scope
+    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
   > =>
     Effect.gen(function* () {
       const { processEnvironment, ...runtimeInput } = input;
@@ -168,18 +165,14 @@ function makeCommandCodeAcpRuntime(options: CommandCodeAdapterV2Options) {
           // Command Code reads and writes through its own permission engine, so
           // grant the T3 attachments directory as an extra workspace root or it
           // cannot open pasted files referenced by absolute path.
-          additionalDirectories: [options.serverConfig.attachmentsDir],
+          additionalDirectories: [options.attachmentsDir],
           spawn: {
             command: options.settings.binaryPath || "cmd",
             args: ["acp", ...commandCodeLaunchArgs(options.settings)],
             cwd: input.cwd,
             env,
           },
-        }).pipe(
-          Layer.provide(
-            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, options.childProcessSpawner),
-          ),
-        ),
+        }),
       );
       return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
         Effect.provide(context),
@@ -206,10 +199,6 @@ function makeCommandCodeAdapterV2(options: CommandCodeAdapterV2Options) {
   return makeAcpAdapterV2({
     instanceId: options.instanceId,
     flavor: makeCommandCodeAcpAdapterFlavor(options),
-    crypto: options.crypto,
-    fileSystem: options.fileSystem,
-    idAllocator: options.idAllocator,
-    serverConfig: options.serverConfig,
     selfInvocation: options.selfInvocation,
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
   });
@@ -220,9 +209,10 @@ export type CommandCodeAdapterV2DriverEnv =
   | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
+  | McpProviderSessions.McpProviderSessions
   | Path.Path
   | ProviderEventLoggers.ProviderEventLoggers
-  | ServerConfig.ServerConfig;
+  | ProviderHost.ProviderHost;
 
 export const CommandCodeAdapterV2Driver: ProviderAdapterDriver<
   CommandCodeSettings,
@@ -233,24 +223,16 @@ export const CommandCodeAdapterV2Driver: ProviderAdapterDriver<
   defaultConfig: (): CommandCodeSettings => DEFAULT_COMMAND_CODE_SETTINGS,
   create: Effect.fn("CommandCodeAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<CommandCodeSettings>) {
-      const hostEnvironment = yield* HostProcessEnvironment;
+      const hostEnvironment = yield* HostProcess.Environment;
       const selfInvocation = yield* resolveSelfInvocation();
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const crypto = yield* Crypto.Crypto;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
-      const serverConfig = yield* ServerConfig.ServerConfig;
+      const host = yield* ProviderHost.ProviderHost;
       const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
-      return makeCommandCodeAdapterV2({
+      return yield* makeCommandCodeAdapterV2({
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
-        environment: mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
-        childProcessSpawner,
-        crypto,
-        fileSystem,
-        idAllocator,
-        serverConfig,
+        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        attachmentsDir: host.paths.attachmentsDir,
         selfInvocation,
         nativeLogging: (threadId) =>
           makeNativeLogger({

@@ -34,11 +34,12 @@ import {
   spawnAndCollect,
   type CommandResult,
   type ServerProviderDraft,
-} from "./providerSnapshot.ts";
+} from "@t3tools/provider-core/server/snapshotProbe";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
-} from "./providerMaintenance.ts";
+} from "@t3tools/provider-core/server/maintenanceResolver";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 
 const COMMAND_CODE_PRESENTATION = {
   displayName: "Command Code",
@@ -431,7 +432,7 @@ export const enrichCommandCodeSnapshot = (input: {
   readonly enableProviderUpdateChecks?: boolean;
   readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
   readonly httpClient: HttpClient.HttpClient;
-}): Effect.Effect<void> => {
+}): Effect.Effect<void, never, ProviderLatestVersions.ProviderLatestVersions> => {
   const { snapshot, publishSnapshot } = input;
 
   return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {

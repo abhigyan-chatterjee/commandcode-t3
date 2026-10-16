@@ -118,9 +118,7 @@ export function resolveOnboardingProviderLoginCommand(
   }
 
   if (provider.driver === "commandcode") {
-    const config = decodeCommandCodeSettings(
-      instance ? (instance.config ?? {}) : settings.providers.commandcode,
-    );
+    const config = decodeCommandCodeSettings(instance?.config ?? {});
     const binaryPath = Option.isSome(config) ? config.value.binaryPath : "cmd";
     return `${quoteProviderBinary(binaryPath, "cmd", platform)} login`;
   }
