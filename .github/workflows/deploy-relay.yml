@@ -27,7 +27,10 @@ jobs:
   deploy_relay:
     name: Deploy production relay
     # A manual run from another branch would deploy that branch to production.
-    if: github.ref == 'refs/heads/main'
+    # The fork configures no Cloudflare/PlanetScale variables, so the second
+    # clause keeps every push to main from queueing a production deploy that
+    # cannot run here.
+    if: github.ref == 'refs/heads/main' && vars.CLOUDFLARE_ACCOUNT_ID != ''
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 15
     environment:
