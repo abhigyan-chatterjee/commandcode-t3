@@ -612,10 +612,16 @@ function SelfHostedUpdateSection() {
       <Button
         size="sm"
         variant="outline"
-        disabled={check.status === "checking"}
+        disabled={
+          check.status === "checking" || (check.status === "available" && environmentId === null)
+        }
         onClick={() => void handleCheck()}
       >
-        {check.status === "checking" ? "Checking…" : "Check for updates"}
+        {check.status === "checking"
+          ? "Checking…"
+          : check.status === "available"
+            ? `Update to ${check.version}`
+            : "Check for updates"}
       </Button>
     );
 
