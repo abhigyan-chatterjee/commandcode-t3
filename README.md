@@ -86,29 +86,6 @@ Take `T3-Code-<version>-x86_64.AppImage` from the [latest release](https://githu
 chmod +x T3-Code-*-x86_64.AppImage
 ./T3-Code-*-x86_64.AppImage
 ```
-
-#### Windows, macOS, Arch
-
-The `winget`, Homebrew, and AUR packages below belong to upstream T3 Code's distribution, not to this fork. Use the [fork's releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases) on Linux, or build from source above.
-
-#### Windows (`winget`)
-
-```bash
-winget install T3Tools.T3Code
-```
-
-#### Windows (`scoop`)
-
-```bash
-scoop install extras/t3code
-```
-
-#### macOS (Homebrew)
-
-```bash
-brew install --cask t3-code
-```
-
 #### Debian, Ubuntu (`.deb`)
 
 Download the `.deb` from [this fork's releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases), then:
@@ -117,27 +94,8 @@ Download the `.deb` from [this fork's releases](https://github.com/abhigyan-chat
 sudo apt install ./T3-Code-*.deb
 ```
 
-#### Arch Linux (AUR)
-
-Stable:
-
-```bash
-yay -S t3code-bin
-```
-
-Nightly:
-
-```bash
-yay -S t3code-nightly-bin
-```
 
 The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
-
-## Some notes
-
-We are very very early in this project. Expect bugs.
-
-We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
 
 ## Documentation
 
@@ -156,18 +114,6 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - [Run T3 Code as a background service](./docs/user/background-service.md)
 
 Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
-
----
-
-## Keeping Up to Date with Upstream T3 Code
-
-This fork tracks upstream [pingdotgg/t3code](https://github.com/pingdotgg/t3code) while preserving Command Code modifications:
-
-1. **Manual Sync**: The GitHub Actions workflow ([`.github/workflows/sync-upstream.yml`](./.github/workflows/sync-upstream.yml)) is run on demand from the Actions tab (scheduled autobuilds are intentionally disabled on this fork) to fetch and merge `upstream/main`. A merge conflict fails the run rather than opening an issue; resolve it locally with the script below.
-2. **Manual Sync Script**: To sync your local branch with upstream at any time:
-   ```bash
-   ./scripts/sync-upstream.sh
-   ```
 
 ---
 
