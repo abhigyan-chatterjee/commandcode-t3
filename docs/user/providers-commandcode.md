@@ -30,8 +30,8 @@ Plan mode switches the session to `plan`; the mode indicator follows the engine.
 
 Every thread is a real Command Code session with a durable id, so a thread
 reopened in T3 Code resumes the same transcript shown by `cmd --resume`, and a
-session started in the terminal reopens in T3 Code. One `cmd acp` process serves
-one project directory; a thread for a different directory gets its own process.
+session started in the terminal reopens in T3 Code. T3 Code starts `cmd acp` in
+the thread's project directory.
 
 ## Models and effort
 
@@ -53,8 +53,10 @@ it; a skill's body rides into the turn as hidden context.
 
 ## Updating Command Code
 
-T3 Code offers an update when the installed version trails the `command-code`
-npm package. The updater runs `cmd update` against the resolved binary.
+Command Code upgrades itself: run `cmd update` in a terminal, or reinstall it
+with `npm i -g command-code`. T3 Code reports the version it detected and uses
+the new binary the next time it starts a session; it does not run the Command
+Code updater for you.
 
 ## Known limitations
 
@@ -62,5 +64,5 @@ npm package. The updater runs `cmd update` against the resolved binary.
   engine; the editor's file and terminal services are not used, so unsaved
   buffers are not visible to the agent.
 - Audio input is not supported. Images and file mentions are.
-- A `cmd acp` process serves a single project directory; a thread for another
-  directory is refused until the others close.
+- T3 Code does not manage the `cmd` installation; install, authenticate, and
+  update it yourself.

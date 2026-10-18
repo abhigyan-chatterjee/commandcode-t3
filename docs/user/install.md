@@ -11,19 +11,20 @@ launch T3 Code and configure providers afterwards.
 ## Command line
 
 ```bash
-curl -fsSL https://t3.codes/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/abhigyan-chatterjee/commandcode-t3/main/scripts/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-irm https://t3.codes/install.ps1 | iex
+irm https://raw.githubusercontent.com/abhigyan-chatterjee/commandcode-t3/main/scripts/install.ps1 | iex
 ```
 
 This installs the `t3` binary to `~/.local/bin`. If your shell reports `command not found`
 afterwards, that directory is not on your `PATH` yet; the installer prints the
-line to add. Set `T3CODE_CHANNEL=nightly` to install the nightly train, or
-`T3CODE_VERSION` to pin an exact version.
+line to add. `t3.codes/install.sh` belongs to upstream T3 Code and installs a
+build without Command Code. This fork publishes one stable train, so leave
+`T3CODE_CHANNEL` at its default; `T3CODE_VERSION` pins an exact version.
 
 | Task                                             | Command                                                                 |
 | ------------------------------------------------ | ----------------------------------------------------------------------- |
@@ -56,8 +57,8 @@ run a server there, build it from source with Node.js 24 and `vp`
 ([Install vp](https://github.com/pingdotgg/t3code#install-vp)):
 
 ```bash
-git clone https://github.com/pingdotgg/t3code
-cd t3code && vp i && vp run build:desktop
+git clone https://github.com/abhigyan-chatterjee/commandcode-t3.git
+cd commandcode-t3 && vp i && vp run build:desktop
 node apps/server/dist/bin.mjs
 ```
 
@@ -66,8 +67,17 @@ update it with `git pull` and a rebuild.
 
 ## Desktop app
 
-Download a release from [GitHub Releases](https://github.com/pingdotgg/t3code/releases),
-or use a package manager:
+Download the AppImage or `.deb` from
+[this fork's GitHub Releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases).
+On Linux:
+
+```bash
+chmod +x T3-Code-*-x86_64.AppImage
+./T3-Code-*-x86_64.AppImage
+```
+
+The package managers below belong to upstream T3 Code's distribution and install
+a build without Command Code:
 
 | Platform           | Install                            |
 | ------------------ | ---------------------------------- |
@@ -87,8 +97,8 @@ The desktop app includes the `t3` command-line tool. To run it from any
 terminal, open **Settings → General → About** and choose **Install** next to
 **t3 command**. On macOS and Linux it adds a `t3` link to a folder on your
 `PATH`; on Windows it adds the app's command folder to your `PATH`. Open a new
-terminal afterwards. **Remove** takes it off again. If you already have `t3`
-from npm, it stays as it is.
+terminal afterwards. **Remove** takes it off again. An existing `t3` from npm is
+upstream T3 Code and is left alone; use the fork's installer above instead.
 
 ### Windows Subsystem for Linux
 

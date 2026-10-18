@@ -47,7 +47,7 @@ Before using Command Code with T3 Code, please review Command Code's [Terms of S
 - **Streaming Turns over ACP**: Real-time tool calls, diffs, plans, and assistant text stream from the `cmd acp` Agent Client Protocol server.
 - **Session Continuation**: Every thread is a real Command Code session; reopening a thread replays and continues the same transcript that `cmd --resume` lists.
 - **Dynamic Model Catalog**: The Command Code model catalog (with per-model reasoning effort) is exposed in the model selector and is scoped to the thread.
-- **Permission Modes**: Seamless mapping between T3 Code runtime modes and Command Code ACP session modes (`default`, `auto-accept`, `plan`, `dont-ask`, `bypass`), with interactive allow/reject prompts.
+- **Permission Modes**: Seamless mapping between T3 Code runtime modes and Command Code ACP session modes (`default`, `auto-accept`, `plan`, `bypass`), with interactive allow/reject prompts.
 - **Context Compaction**: Native `/compact` support mapped to thread compaction.
 - **Text Generation**: Generates thread titles, commit messages, PR descriptions, and branch names using one-shot headless queries.
 
@@ -161,7 +161,7 @@ Building from source? Start at [docs/internals/overview.md](./docs/internals/ove
 
 ## Keeping Up to Date with Upstream T3 Code
 
-This fork tracks upstream [pingdotgg/t3code](https://github.com/pingdotgg/t3code) changes automatically while preserving Command Code modifications:
+This fork tracks upstream [pingdotgg/t3code](https://github.com/pingdotgg/t3code) while preserving Command Code modifications:
 
 1. **Manual Sync**: The GitHub Actions workflow ([`.github/workflows/sync-upstream.yml`](./.github/workflows/sync-upstream.yml)) is run on demand from the Actions tab (scheduled autobuilds are intentionally disabled on this fork) to fetch and merge `upstream/main`. A merge conflict fails the run rather than opening an issue; resolve it locally with the script below.
 2. **Manual Sync Script**: To sync your local branch with upstream at any time:

@@ -102,8 +102,8 @@ Install the CLI with the fork's installer (`scripts/install.sh`) and use
 
 ## Check for updates in Settings
 
-**Settings → About** is the manual entry point on every client, even when no
-update notice is showing:
+**Settings → General → About** is the manual entry point on every client, even
+when no update notice is showing:
 
 - **Desktop app**: **Check for Updates** asks the Electron updater for the
   newest build on your release channel, then offers **Download** and
