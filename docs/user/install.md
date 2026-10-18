@@ -42,8 +42,12 @@ If `t3` or `t3 start` reports an already running server, connect to that server
 instead. Stop it before starting a replacement, or use a different `--base-dir`
 for an independent server.
 
-To try T3 Code once without installing it, run `npx t3@latest` instead (needs
-Node.js for `npx`).
+This fork is not published to npm, so `npx t3@latest` would fetch upstream T3
+Code without Command Code. Install this fork with its own script instead:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/abhigyan-chatterjee/commandcode-t3/main/scripts/install.sh | sh
+```
 
 ### Intel Macs
 

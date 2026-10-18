@@ -2,6 +2,14 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
+> **This fork.** Releases are cut by
+> [`.github/workflows/fork-release.yml`](../../.github/workflows/fork-release.yml)
+> on every push to `main`. It builds the Linux AppImage and `.deb`, the CLI
+> archive, and the updater feed, then publishes one GitHub Release from the
+> default `GITHUB_TOKEN`. It needs no repository secrets and never touches npm,
+> AUR, the hosted web app, or Discord. The rest of this document describes
+> upstream's `release.yml`, which this fork does not run.
+
 This document covers the unified release workflow for stable and nightly desktop releases.
 
 Beta is the product label, not a release channel or version suffix. Release channels
