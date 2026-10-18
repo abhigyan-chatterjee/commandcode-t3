@@ -1,5 +1,10 @@
 # T3 Code docs
 
+> **This fork.** These docs describe the app you run yourself. Upstream's hosted
+> app (`app.t3.codes`), its npm packages, and its `winget`/Homebrew/AUR builds
+> are not part of this fork; install, update, and release pages here point at
+> this repository's own [releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases).
+
 ## Using T3 Code
 
 - [Install T3 Code](./user/install.md)
