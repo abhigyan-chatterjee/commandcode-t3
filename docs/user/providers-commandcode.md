@@ -33,6 +33,15 @@ reopened in T3 Code resumes the same transcript shown by `cmd --resume`, and a
 session started in the terminal reopens in T3 Code. T3 Code starts `cmd acp` in
 the thread's project directory.
 
+## Multiple accounts
+
+Add another provider instance in **Settings → Providers → Add provider** for a
+second configuration. Command Code keeps its login on the machine, so instances
+that share a home directory share one account; give the extra instance its own
+`HOME` (an environment variable on the instance) when you need a separate login,
+then run `cmd login` for it. Command Code's terms restrict each person to one
+account, so check them first.
+
 ## Models and effort
 
 The picker lists the Command Code model catalog. The choice belongs to the
