@@ -50,7 +50,9 @@ import {
   SidebarProjectSortOrder,
 } from "@t3tools/contracts/settings";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import { cliReleaseIndexPageUrl, newestCliReleaseVersion } from "@t3tools/shared/cliRelease";
 import { createModelSelection } from "@t3tools/shared/model";
+import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
@@ -71,6 +73,11 @@ import {
 } from "../SidebarStageBackdrop";
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
+import {
+  resolveServerSelfUpdateCapability,
+  supportsServerUpdateThreadContinuation,
+} from "../../versionSkew";
+import { ServerUpdateAction } from "../ServerUpdateAction";
 import { useCustomThemes } from "../../hooks/useCustomThemes";
 import {
   readAppearanceModePreference,
@@ -509,6 +516,116 @@ function AboutVersionSection() {
       ) : null}
       {hasDesktopBridge ? <CliCommandSettingsRow /> : null}
     </>
+  );
+}
+
+type LatestReleaseCheck =
+  | { readonly status: "idle" }
+  | { readonly status: "checking" }
+  | { readonly status: "current"; readonly version: string }
+  | { readonly status: "available"; readonly version: string }
+  | { readonly status: "error"; readonly message: string };
+
+async function fetchNewestStableReleaseVersion(): Promise<string | undefined> {
+  const response = await fetch(cliReleaseIndexPageUrl(1), {
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!response.ok) {
+    throw new Error(`Could not reach the release index (HTTP ${response.status}).`);
+  }
+  const releases: unknown = await response.json();
+  if (!Array.isArray(releases)) return undefined;
+  return newestCliReleaseVersion(
+    releases as ReadonlyArray<{ tag_name: string; draft?: boolean | undefined }>,
+    "stable",
+  );
+}
+
+function isNewerVersion(candidate: string, current: string): boolean {
+  return parseSemver(candidate) !== null && parseSemver(current) !== null
+    ? compareSemverVersions(candidate, current) > 0
+    : candidate !== current;
+}
+
+/**
+ * Self-hosted installs have no Electron bridge, so the desktop updater cannot
+ * run. This checks this fork's release index and then hands off to the same
+ * server-update path the version-skew banner uses, falling back to the CLI
+ * updater command when the server cannot update itself.
+ */
+function SelfHostedUpdateSection() {
+  const { environment } = useSettingsScope();
+  const [check, setCheck] = useState<LatestReleaseCheck>({ status: "idle" });
+
+  const serverConfig = environment?.serverConfig ?? null;
+  const environmentId = environment?.environmentId ?? null;
+  const serverVersion = serverConfig?.environment.serverVersion ?? APP_VERSION;
+  const selfUpdate = resolveServerSelfUpdateCapability(serverConfig);
+  const installation = serverConfig?.environment.capabilities.serverInstallation;
+  const threadContinuation = supportsServerUpdateThreadContinuation(serverConfig);
+
+  const handleCheck = useCallback(async () => {
+    setCheck({ status: "checking" });
+    try {
+      const latest = await fetchNewestStableReleaseVersion();
+      if (latest === undefined) {
+        setCheck({ status: "error", message: "No stable release is published yet." });
+        return;
+      }
+      setCheck(
+        isNewerVersion(latest, serverVersion)
+          ? { status: "available", version: latest }
+          : { status: "current", version: latest },
+      );
+    } catch (error) {
+      setCheck({
+        status: "error",
+        message: error instanceof Error ? error.message : "Update check failed.",
+      });
+    }
+  }, [serverVersion]);
+
+  const description =
+    check.status === "checking"
+      ? "Checking this fork's GitHub releases…"
+      : check.status === "current"
+        ? `Up to date on ${check.version}.`
+        : check.status === "available"
+          ? `Version ${check.version} is available.`
+          : check.status === "error"
+            ? check.message
+            : "Check this fork's GitHub releases for a newer build.";
+
+  const control =
+    check.status === "available" && environmentId !== null ? (
+      <ServerUpdateAction
+        environmentId={environmentId}
+        serverLabel={environment?.label ?? "this server"}
+        selfUpdate={selfUpdate}
+        installation={installation}
+        threadContinuation={threadContinuation}
+        targetVersion={check.version}
+        label={`Update to ${check.version}`}
+        size="sm"
+      />
+    ) : (
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={check.status === "checking"}
+        onClick={() => void handleCheck()}
+      >
+        {check.status === "checking" ? "Checking…" : "Check for updates"}
+      </Button>
+    );
+
+  return (
+    <SettingsRow
+      id={searchableSetting("server-updates").id}
+      title="Server updates"
+      description={description}
+      control={control}
+    />
   );
 }
 
@@ -3314,6 +3431,7 @@ export function GeneralSettingsPanel() {
               title={<AboutVersionTitle />}
               description="Current version of the application."
             />
+            <SelfHostedUpdateSection />
           </>
         )}
         <SettingsRow

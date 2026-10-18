@@ -1,4 +1,7 @@
-const CLI_RELEASE_REPOSITORY = "pingdotgg/t3code";
+// This fork publishes its own CLI archives and desktop builds, so `t3 update`
+// and every self-update path must resolve releases from the fork rather than
+// upstream. `T3CODE_RELEASE_BASE_URL` can still point the downloads elsewhere.
+const CLI_RELEASE_REPOSITORY = "abhigyan-chatterjee/commandcode-t3";
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
 

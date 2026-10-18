@@ -518,6 +518,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["about check for updates download install upgrade release"],
   },
   {
+    id: "server-updates",
+    title: "Server updates",
+    to: "/settings/general",
+    searchTerms: ["about check for updates download install upgrade release latest version"],
+  },
+  {
     id: "update-track",
     title: "Update track",
     to: "/settings/general",

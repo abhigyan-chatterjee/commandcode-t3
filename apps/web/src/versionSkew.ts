@@ -103,15 +103,12 @@ export function supportsServerUpdateThreadContinuation(
 
 export function manualServerUpdateCommand(
   targetVersion: string,
-  installation?: ServerInstallation,
+  _installation?: ServerInstallation,
 ): string {
-  if (installation?.kind === "npm-global") {
-    const prefix = `'${installation.prefix.replaceAll("'", "'\\''")}'`;
-    return `npm install --global --prefix ${prefix} t3@${targetVersion}`;
-  }
-  const runner =
-    installation?.kind === "pnpm-dlx" ? "pnpm dlx" : installation?.kind === "bunx" ? "bunx" : "npx";
-  return `${runner} t3@${targetVersion}`;
+  // This fork publishes CLI archives as GitHub releases rather than npm
+  // packages, so `t3 update` (which resolves this fork's release index) is the
+  // only command that actually installs our build. npm/npx would pull upstream.
+  return `t3 update ${targetVersion}`;
 }
 
 export function serverUpdateGuidance(capability: ServerSelfUpdateCapability): string {

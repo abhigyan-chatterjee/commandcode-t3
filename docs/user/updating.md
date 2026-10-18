@@ -23,8 +23,9 @@ restart from the update button when you are ready. A server still restarting
 finishes on its own, and the button keeps showing it after the desktop app
 restarts.
 
-Server updates appear only after that version is published to npm. Remote
-desktop apps do not wait for npm. The confirmation lists each machine it skips
+Server updates appear only after that version is published to this fork's
+GitHub releases. Remote desktop apps resolve the same releases. The
+confirmation lists each machine it skips
 and why, such as a machine that is offline or needs a manual update. Use the
 notice or **Settings → Connections** for those.
 
@@ -94,9 +95,27 @@ asks before restarting the background service; if you decline, run
 stop it and start it again afterwards with your usual options such as `--host`
 or `--tailscale-serve`.
 
-If you run the server with `npx` rather than an installed `t3`, there is
-nothing to update on the host: stop the server and relaunch it as
-`npx t3@<client-version>` with the same subcommand and options.
+This fork publishes CLI archives as GitHub releases rather than npm packages,
+so `npx t3@<version>` and `npm install -g t3` fetch **upstream** T3 Code.
+Install the CLI with the fork's installer (`scripts/install.sh`) and use
+`t3 update <version>` instead.
+
+## Check for updates in Settings
+
+**Settings → About** is the manual entry point on every client, even when no
+update notice is showing:
+
+- **Desktop app**: **Check for Updates** asks the Electron updater for the
+  newest build on your release channel, then offers **Download** and
+  **Install**. The sidebar update button does the same when a release is
+  waiting.
+- **Web (self-hosted run)**: **Server updates → Check for updates** reads this
+  fork's GitHub releases. When the server can update itself, it installs the
+  newer build and reconnects; otherwise the action copies
+  `t3 update <version>` to run on the server's machine.
+
+Desktop builds and the CLI updater both resolve
+`abhigyan-chatterjee/commandcode-t3` releases, so updates stay on this fork.
 
 ## If an update fails
 
