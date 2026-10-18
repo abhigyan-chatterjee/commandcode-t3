@@ -1,11 +1,8 @@
 name: Mobile Android APK
 
-# Checks closed testing hourly. Each new beta gets one versioned prerelease.
-# Unchanged checks publish nothing.
+# Each new beta gets one versioned prerelease; unchanged checks publish nothing.
+# This fork does not autobuild: run the APK mirror by hand from the Actions tab.
 on:
-  schedule:
-    # Avoid minute zero, when GitHub scheduled jobs are busiest.
-    - cron: "23 * * * *"
   workflow_dispatch:
 
 concurrency:
