@@ -2,7 +2,13 @@
 
 This repository is a lightweight, tracking fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code) (MIT) that adds **Command Code** (CLI binary `cmd`, [commandcode.ai](https://commandcode.ai)) as a first-class, built-in agent provider.
 
-Because upstream T3 Code is not accepting new third-party provider integrations, this fork maintains full Command Code integration while staying continuously in sync with upstream T3 Code updates.
+Because upstream T3 Code is not accepting new third-party provider integrations, this fork maintains full Command Code integration while staying continuously in sync with upstream T3 Code updates. This fork contains all upstream features while adding CommandCode support. It will keep being actively developed until there is first class support for CommandCode on t3's own upstream.
+
+---
+
+## Bug report
+
+Open a new issue on **this fork's** github issues, NOT the upstream.
 
 ---
 
@@ -76,7 +82,7 @@ vp run dev
 
 ## Desktop app
 
-This fork publishes its own Linux builds. Download the AppImage or `.deb` from [this fork's GitHub Releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases): every push to `main` cuts a new version, and an installed app updates itself over the air from those releases.
+This fork publishes its own Linux builds. Download the AppImage or `.deb` from [this fork's GitHub Releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases): every push to `main` cuts a new version, and an installed app updates itself over the air from those releases. There is no current Windows or MacOS build for this fork, as I do not have access to either of those OSes, so I can not guarantee and verify the functionality.
 
 #### Linux (AppImage)
 
@@ -86,6 +92,7 @@ Take `T3-Code-<version>-x86_64.AppImage` from the [latest release](https://githu
 chmod +x T3-Code-*-x86_64.AppImage
 ./T3-Code-*-x86_64.AppImage
 ```
+
 #### Debian, Ubuntu (`.deb`)
 
 Download the `.deb` from [this fork's releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases), then:
@@ -93,9 +100,6 @@ Download the `.deb` from [this fork's releases](https://github.com/abhigyan-chat
 ```bash
 sudo apt install ./T3-Code-*.deb
 ```
-
-
-The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
 
 ## Documentation
 
