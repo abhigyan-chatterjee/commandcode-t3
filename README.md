@@ -1,3 +1,7 @@
+## This repository is now archived, because T3 has added support for generic ACP clients, and Commandcode is being added to the ACP registry. Additionally, I no longer use commandcode, Hence I can not verify functionalities for further releases 
+
+
+
 # Command Code for T3 Code (`commandcode-t3`)
 
 This repository is a lightweight, tracking fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code) (MIT) that adds **Command Code** (CLI binary `cmd`, [commandcode.ai](https://commandcode.ai)) as a first-class, built-in agent provider.
