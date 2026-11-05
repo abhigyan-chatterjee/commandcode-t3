@@ -1,12 +1,14 @@
-## This repository is now archived, because T3 has added support for generic ACP clients, and Commandcode is being added to the ACP registry. Additionally, I no longer use commandcode, Hence I can not verify functionalities for further releases 
+## Archived
+
+T3 Code now supports generic ACP clients and Command Code is being added to the ACP registry, so this fork no longer has a reason to exist. I also no longer use Command Code, so I cannot verify functionality in further releases. The code and the last release (v0.1.13) remain available.
 
 
 
 # Command Code for T3 Code (`commandcode-t3`)
 
-This repository is a lightweight, tracking fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code) (MIT) that adds **Command Code** (CLI binary `cmd`, [commandcode.ai](https://commandcode.ai)) as a first-class, built-in agent provider.
+This repository is a tracking fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code) (MIT) that adds **Command Code** (CLI binary `cmd`, [commandcode.ai](https://commandcode.ai)) as a first-class, built-in agent provider.
 
-Because upstream T3 Code is not accepting new third-party provider integrations, this fork maintains full Command Code integration while staying continuously in sync with upstream T3 Code updates. This fork contains all upstream features while adding CommandCode support. It will keep being actively developed until there is first class support for CommandCode on t3's own upstream.
+Upstream T3 Code was not accepting new third-party provider integrations, so this fork carried the Command Code integration and kept in sync with upstream: all upstream features, plus Command Code.
 
 ---
 
@@ -34,7 +36,7 @@ This starts the server and opens the local T3 Code GUI in your default browser.
 
 > **Prerequisites:**
 >
-> 1. [Node.js](https://nodejs.org) (v24+ recommended, v22.16+ minimum)
+> 1. [Node.js](https://nodejs.org) v24 or newer (`engines` pins `^24.13.1`)
 > 2. [Command Code CLI](https://commandcode.ai/docs): `npm i -g command-code && cmd login`
 
 ---
@@ -86,7 +88,7 @@ vp run dev
 
 ## Desktop app
 
-This fork publishes its own Linux builds. Download the AppImage or `.deb` from [this fork's GitHub Releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases): every push to `main` cuts a new version, and an installed app updates itself over the air from those releases. There is no current Windows or MacOS build for this fork, as I do not have access to either of those OSes, so I can not guarantee and verify the functionality.
+This fork published its own Linux builds. Download the AppImage or `.deb` from [this fork's GitHub Releases](https://github.com/abhigyan-chatterjee/commandcode-t3/releases): releases were cut on every push to `main` while the fork was active, and an installed app updates itself over the air from them. There is no Windows or MacOS build for this fork, as I do not have access to either of those OSes, so I can not guarantee and verify the functionality.
 
 #### Linux (AppImage)
 
